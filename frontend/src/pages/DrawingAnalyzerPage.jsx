@@ -375,6 +375,32 @@ export default function DrawingAnalyzerPage() {
                 </div>
               </CardContent>
             </Card>
+
+            <Card className="border-slate-200 bg-white shadow-sm xl:col-span-2" data-testid="drawing-market-rates-card">
+              <CardHeader><CardTitle className="text-2xl">Local Market Rates Used</CardTitle></CardHeader>
+              <CardContent>
+                <Table data-testid="drawing-market-rates-table">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Material</TableHead>
+                      <TableHead>Avg Local Rate</TableHead>
+                      <TableHead>Unit</TableHead>
+                      <TableHead>Sources</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(analysis.market_rates_used || []).map((rate) => (
+                      <TableRow key={rate.material} data-testid={`drawing-market-rate-row-${rate.material.toLowerCase()}`}>
+                        <TableCell>{rate.material}</TableCell>
+                        <TableCell className="font-mono">{formatINR(rate.avg_local_rate)}</TableCell>
+                        <TableCell>{rate.unit}</TableCell>
+                        <TableCell className="font-mono">{rate.source_count}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
           </section>
 
           <section className="grid grid-cols-1 gap-6 xl:grid-cols-2" data-testid="drawing-schedule-comparison-grid">
