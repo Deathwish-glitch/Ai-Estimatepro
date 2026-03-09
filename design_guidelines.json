@@ -1,0 +1,141 @@
+{
+  "identity": {
+    "name": "E1 - The Structural Minimalist",
+    "persona": "You are a pragmatic designer who values clarity above decoration. Your designs feel like well-drafted blueprints: precise, clean, and trustworthy. You use whitespace as a structural element, not just empty space.",
+    "principles": [
+      "Clarity is King: Data must be instantly readable.",
+      "Structure over Style: Use grids and alignment to create beauty.",
+      "Trust through Precision: Use high-quality typography and consistent spacing.",
+      "Mobile-First Utility: The app must work perfectly on a phone at a construction site."
+    ]
+  },
+  "typography": {
+    "primary_font": "Inter",
+    "heading_font": "Barlow Condensed",
+    "mono_font": "JetBrains Mono",
+    "scale": {
+      "h1": "text-4xl md:text-5xl font-bold tracking-tight",
+      "h2": "text-3xl md:text-4xl font-semibold tracking-tight",
+      "h3": "text-2xl font-medium",
+      "body": "text-base leading-relaxed",
+      "small": "text-sm text-muted-foreground",
+      "mono": "font-mono text-sm tracking-wide"
+    }
+  },
+  "colors": {
+    "theme": "light",
+    "palette": {
+      "background": "#F8FAFC",
+      "foreground": "#0F172A",
+      "primary": "#0F172A",
+      "primary_foreground": "#F8FAFC",
+      "secondary": "#F1F5F9",
+      "secondary_foreground": "#0F172A",
+      "muted": "#F1F5F9",
+      "muted_foreground": "#64748B",
+      "accent": "#F97316",
+      "accent_foreground": "#FFFFFF",
+      "success": "#10B981",
+      "success_foreground": "#FFFFFF",
+      "border": "#E2E8F0",
+      "input": "#E2E8F0",
+      "ring": "#0F172A"
+    },
+    "usage": {
+      "primary": "Main actions, headings, strong borders",
+      "secondary": "Backgrounds for cards, secondary buttons",
+      "accent": "Call to actions (Calculate, Save), important highlights",
+      "success": "Positive values, profit margins, completed steps",
+      "muted": "Subtle text, inactive states, dividers"
+    }
+  },
+  "layout": {
+    "grid_system": "Bento Grid",
+    "container": "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8",
+    "spacing": {
+      "section_gap": "gap-8 md:gap-12",
+      "card_padding": "p-6 md:p-8",
+      "element_gap": "gap-4"
+    },
+    "dashboard_structure": {
+      "mobile": "flex flex-col gap-4",
+      "desktop": "grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6"
+    }
+  },
+  "components": {
+    "cards": {
+      "style": "bg-white border border-slate-200 shadow-sm rounded-lg hover:shadow-md transition-shadow duration-200",
+      "header": "font-bold text-lg text-slate-900 mb-2",
+      "content": "text-slate-600"
+    },
+    "buttons": {
+      "primary": "bg-slate-900 text-white hover:bg-slate-800 rounded-md px-6 py-2.5 font-medium transition-colors",
+      "secondary": "bg-slate-100 text-slate-900 hover:bg-slate-200 rounded-md px-6 py-2.5 font-medium transition-colors",
+      "accent": "bg-orange-500 text-white hover:bg-orange-600 rounded-md px-6 py-2.5 font-medium shadow-sm transition-colors",
+      "outline": "border-2 border-slate-200 text-slate-700 hover:border-slate-300 hover:bg-slate-50 rounded-md px-6 py-2.5 font-medium transition-colors"
+    },
+    "inputs": {
+      "style": "flex h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-slate-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
+      "label": "text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 mb-2 block text-slate-700"
+    },
+    "tables": {
+      "wrapper": "relative w-full overflow-auto rounded-lg border border-slate-200",
+      "header": "h-12 px-4 text-left align-middle font-medium text-slate-500 [&:has([role=checkbox])]:pr-0 bg-slate-50",
+      "row": "border-b transition-colors hover:bg-slate-50/50 data-[state=selected]:bg-slate-50",
+      "cell": "p-4 align-middle [&:has([role=checkbox])]:pr-0 font-mono text-sm"
+    }
+  },
+  "visual_enhancers": {
+    "shadows": "shadow-sm hover:shadow-md transition-all duration-300",
+    "borders": "border border-slate-200",
+    "radius": "rounded-lg",
+    "icons": "Use Lucide React icons. Stroke width 1.5px for a clean, technical look."
+  },
+  "charts": {
+    "library": "recharts",
+    "colors": [
+      "#0F172A",
+      "#F97316",
+      "#10B981",
+      "#64748B",
+      "#334155"
+    ],
+    "style": "Minimalist, no grid lines (or very subtle), clear tooltips."
+  },
+  "images": {
+    "hero_bg": "https://images.unsplash.com/photo-1763281486056-9fd34c978a7d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDJ8MHwxfHNlYXJjaHwxfHxtb2Rlcm4lMjBjb25zdHJ1Y3Rpb24lMjBzaXRlJTIwYmx1ZXByaW50cyUyMGNpdmlsJTIwZW5naW5lZXIlMjBwb3J0cmFpdHxlbnwwfHx8fDE3NzMwNDM5NDJ8MA&ixlib=rb-4.1.0&q=85",
+    "about_image": "https://images.unsplash.com/photo-1758876734777-dcc6981f3671?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDJ8MHwxfHNlYXJjaHw0fHxtb2Rlcm4lMjBjb25zdHJ1Y3Rpb24lMjBzaXRlJTIwYmx1ZXByaW50cyUyMGNpdmlsJTIwZW5naW5lZXIlMjBwb3J0cmFpdHxlbnwwfHx8fDE3NzMwNDM5NDJ8MA&ixlib=rb-4.1.0&q=85",
+    "logo_placeholder": "Use a simple typographic logo: 'BuildCalc' in Barlow Condensed Bold."
+  },
+  "instructions_to_main_agent": [
+    "1. Use 'lucide-react' for all icons.",
+    "2. Use 'recharts' for data visualization.",
+    "3. Ensure all inputs have clear labels and placeholder text.",
+    "4. The dashboard should be the central hub. Use a bento-grid layout.",
+    "5. For the 'Estimate' page, use a multi-step form or a clean single-page form with distinct sections.",
+    "6. Material quantities should be presented in a clear, zebra-striped table.",
+    "7. Schedule should use a vertical timeline or a simple Gantt-chart style visualization.",
+    "8. Implement a 'Save Project' feature that uses local storage or a simple backend database (as per requirements).",
+    "9. Ensure the PDF export feature generates a clean, professional report.",
+    "10. Make sure the 'Unit Converter' is easily accessible, perhaps as a modal or a sidebar widget."
+  ],
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "You tend to converge toward generic, 'on distribution' outputs. In frontend design, this creates what users call the 'AI slop' aesthetic. Avoid this: make creative, distinctive frontends that surprise and delight.",
+    "Dark colors look good when used independently without gradients. DO NOT use dark colors as gradients",
+    "Don't make generic centered layouts, simplistic gradients, and uniform styling.",
+    "Create depth through layered design elements with z-index hierarchy",
+    "Use glass-morphism effects with backdrop filters (12-24px blur) where appropriate (e.g., sticky headers).",
+    "You MUST NOT apply universal transition. Eg: 'transition: all'. This results in breaking transforms. Always add transitions for specific interactive elements like button, input excluding transforms",
+    "You MUST NOT center align the app container. This disrupts the human natural reading flow of text",
+    "Always use modern button styles like pill-shaped, or sharp button with interaction animations & color relevant to the app style",
+    "NEVER: use AI assistant Emoji characters for icons.",
+    "Every interaction needs micro-animations - hover states, transitions.",
+    "Use 2-3x more spacing than feels comfortable. Cramped designs look cheap.",
+    "Main agent relies on these image URLs. Missing categories = main agent will use placeholder text which is FORBIDDEN",
+    "Prioritize using pre-existing components from src/components/ui when applicable",
+    "Components MUST use named exports",
+    "Pages MUST use default exports",
+    "Use 'sonner' for toasts",
+    "All interactive and key informational elements MUST include a 'data-testid' attribute"
+  ]
+}
