@@ -22,19 +22,21 @@ export default function MaterialsPage() {
 
   if (!latestEstimate) {
     return (
-      <Card className="border-slate-200 bg-white shadow-sm" data-testid="materials-empty-state-card">
-        <CardHeader>
-          <CardTitle data-testid="materials-empty-state-title">No material data yet</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <p className="text-sm text-slate-600" data-testid="materials-empty-state-description">
-            Generate your estimate first to view the material quantity calculator.
-          </p>
-          <Link to="/estimate" data-testid="materials-empty-state-link">
-            <Button className="rounded-full" data-testid="materials-go-to-estimate-button">Go to Estimate</Button>
-          </Link>
-        </CardContent>
-      </Card>
+      <div className="space-y-6 reveal-up" data-testid="materials-page">
+        <Card className="border-slate-200 bg-white shadow-sm" data-testid="materials-empty-state-card">
+          <CardHeader>
+            <CardTitle data-testid="materials-empty-state-title">No material data yet</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-slate-600" data-testid="materials-empty-state-description">
+              Generate your estimate first to view the material quantity calculator.
+            </p>
+            <Link to="/estimate" data-testid="materials-empty-state-link">
+              <Button className="rounded-full" data-testid="materials-go-to-estimate-button">Go to Estimate</Button>
+            </Link>
+          </CardContent>
+        </Card>
+      </div>
     );
   }
 

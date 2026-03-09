@@ -1,54 +1,72 @@
-# PRD — AI Estimate Pro
+# PRD — AI Estimate Pro (Extended Local Intelligence Release)
 
 ## Original Problem Statement
-Build a simple, clean, responsive web app for construction estimate assistance (cost estimate, materials, schedule, charts, save projects, PDF/print, unit converter, tips) for students, homeowners, and small contractors.
+Extend existing construction estimation app (do not rebuild) with local market intelligence for Nashik + nearby areas, supplier updates, WhatsApp rate ingestion, smarter optimized estimates, contractor comparison, speed-optimized schedule, trend tracking, professional reports, and updated navigation.
 
 ## User Choices Captured
-- Save project in database (no login)
-- Use built-in India-average rates for MVP
-- PDF should include full report with charts/tips context
-- White UI; auto-pick readable palette
-- Upgrade request: rename app to **AI Estimate Pro**, add detailed materials (very detailed but not super deep), add chatbot support, add more detailed schedule, and add smart improvements
-- Chatbot choices: both app + construction help, OpenAI GPT-5.2, Emergent universal key
+- Website ingestion: **full auto-scrape best effort**
+- Contractor comparison: **manual input + auto baseline fallback**
+- Refresh cycle: **user-selectable (daily/weekly)**
+- WhatsApp free option: implemented **Meta Cloud API webhook-style integration path** (free-start friendly)
 
 ## Architecture Decisions
-- **Frontend:** React + shadcn/ui + Recharts + jsPDF
+- **Frontend:** React + shadcn/ui + Recharts/jsPDF (fixed-size chart rendering for stability)
 - **Backend:** FastAPI + MongoDB (Motor)
-- **AI Chat:** `emergentintegrations.llm.chat` using OpenAI GPT-5.2 via `EMERGENT_LLM_KEY`
-- **Persistence:** MongoDB collections for saved projects and chat messages
-- **Compatibility:** Added legacy project schema upgrade logic to avoid 500 errors with old saved data
+- **AI Chat:** OpenAI GPT-5.2 via `EMERGENT_LLM_KEY`
+- **Market Intelligence Data:**
+  - `market_rate_sources` (manual/supplier/website/government/whatsapp entries)
+  - `market_rate_history` (trend points)
+  - `market_rate_snapshots` (aggregated snapshots)
+  - `supplier_rates` (portal + WhatsApp updates)
+  - `app_settings` (refresh frequency)
+- **Compatibility:** Legacy saved project upgrade path retained to prevent schema break
 
 ## Implemented
-- Multi-page responsive UI with top navigation: Home, Estimate, Materials, Schedule, About
-- Rebranded app identity to **AI Estimate Pro**
-- Estimate engine with India-default rates + location/floor/type adjustments
-- Cost breakdown cards/table + pie chart
-- Detailed material engine (30 line items) with category, quantity, unit, usage note
-- Materials page with category summary cards + detailed BOQ-style table + chart
-- Expanded schedule engine (8 phases) with tasks, milestones, expected crew size
-- Schedule page includes timeline + detailed phase plan table + task cards
-- Save/list/load projects (no login) with backward-compatible legacy data handling
-- PDF download + print report
-- Unit converter tool (feet↔meter, m³↔ft³)
-- Construction tips + smart suggestions section
-- AI chatbot (session creation, message, history persistence, contextual replies)
-- Data-testid coverage across core interactive and key informational elements
-- Regression tests added by testing agent: `/app/backend/tests/test_api_core.py` (passing)
+- New navigation: **Home, Estimate, BOQ, Local Market Rates, Suppliers, Reports**
+- Local Market Rates module:
+  - daily/weekly settings
+  - aggregated average local rates table (material, avg rate, source count, cheapest supplier)
+  - manual source ingestion endpoint + UI form
+  - URL scrape endpoint (best-effort extraction for Cement/Steel/Sand/Brick)
+  - material price trend endpoint + chart
+- Supplier dashboard:
+  - supplier form (name, location, cement/steel/sand/brick)
+  - supplier update listing table
+- WhatsApp support:
+  - `/api/whatsapp/webhook` verify + receive endpoints
+  - structured message parsing (`RATE UPDATE ...`) into supplier/material databases
+- Smart estimate optimization:
+  - uses local market rates in estimate computation
+  - material/labour optimization factors
+  - recommended cheaper suppliers in response
+- Contractor comparison:
+  - table rows for contractor vs AI estimate vs savings
+  - supports manual contractor values + fallback baseline
+- Construction speed optimization:
+  - optimized schedule stages with parallel-work indicators
+- Report enhancements:
+  - reports page with comparison chart/table and optimized timeline
+  - PDF now includes local rate analysis, comparison, and optimized schedule tables
+- BOQ enhancements:
+  - detailed itemized BOQ remains with category summary
+- QA fixes from testing:
+  - stable BOQ page-level `data-testid` in both populated and empty states
+  - removed chart mount warnings by switching to fixed-size chart rendering
 
 ## Prioritized Backlog
 ### P0
-- Add markdown-safe rendering in chatbot replies for cleaner formatting
-- Add material category filters/search for faster BOQ exploration
+- Add Nashik area-wise micro-zones (Nashik city / Satpur / Gangapur / nearby talukas) for tighter rate filtering
+- Add supplier trust score (freshness + variance + consistency)
 
 ### P1
-- Add phase-wise cash flow chart and procurement calendar
-- Add CSV/Excel export for materials and schedule
+- Add periodic background scraper jobs for approved source lists
+- Add downloadable Excel BOQ + trend appendix for presentation workflow
 
 ### P2
-- Add multi-project comparison dashboard
-- Add location presets by city with periodically updateable rates
+- Add negotiation assistant suggestions (purchase timing + batch split)
+- Add multi-project benchmark dashboard
 
 ## Next Tasks
-1. Improve chatbot response formatting and shorten output consistency.
-2. Add material filters (category + keyword) and print-friendly material view.
-3. Add phase-wise cost plan view (timeline + spend curve).
+1. Introduce zone-based local rate filtering and confidence score per material.
+2. Add source quality controls (outlier removal + weighted average by recency/reliability).
+3. Add report templates for homeowner summary vs engineering-detail mode.

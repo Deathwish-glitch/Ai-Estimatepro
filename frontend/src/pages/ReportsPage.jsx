@@ -1,12 +1,14 @@
 import { Link } from "react-router-dom";
-import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, Tooltip, XAxis, YAxis } from "recharts";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useBuildCalc } from "@/context/BuildCalcContext";
+import { useChartReady } from "@/hooks/useChartReady";
 import { formatINR } from "@/utils/formatters";
 
 export default function ReportsPage() {
+  const chartReady = useChartReady();
   const { latestEstimate } = useBuildCalc();
 
   if (!latestEstimate) {
@@ -81,16 +83,18 @@ export default function ReportsPage() {
             <CardTitle className="text-2xl">AI vs Contractor Chart</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="h-72 min-h-72 w-full min-w-0" data-testid="reports-comparison-chart-wrapper">
-              <ResponsiveContainer width="100%" height="100%" minWidth={280} minHeight={240}>
-                <BarChart data={comparisonChartData}>
+            <div className="h-72 min-h-72 w-full overflow-x-auto" data-testid="reports-comparison-chart-wrapper">
+              {chartReady ? (
+                <BarChart width={560} height={260} data={comparisonChartData}>
                   <XAxis dataKey="category" />
                   <YAxis />
                   <Tooltip formatter={(value) => formatINR(Number(value))} />
                   <Bar dataKey="contractor" fill="#0F172A" radius={[6, 6, 0, 0]} />
                   <Bar dataKey="ai" fill="#F97316" radius={[6, 6, 0, 0]} />
                 </BarChart>
-              </ResponsiveContainer>
+              ) : (
+                <div className="h-full w-full rounded-lg bg-slate-50" data-testid="reports-comparison-loading-placeholder" />
+              )}
             </div>
           </CardContent>
         </Card>

@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
-import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Line, LineChart, Tooltip, XAxis, YAxis } from "recharts";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useChartReady } from "@/hooks/useChartReady";
 import {
   createMarketSourceEntriesApi,
   getMarketRateSettingsApi,
@@ -28,6 +29,7 @@ const initialSourceForm = {
 };
 
 export default function LocalMarketRatesPage() {
+  const chartReady = useChartReady();
   const [refreshFrequency, setRefreshFrequency] = useState("weekly");
   const [marketRates, setMarketRates] = useState([]);
   const [trendMaterial, setTrendMaterial] = useState("Cement");
@@ -203,15 +205,17 @@ export default function LocalMarketRatesPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="h-72 min-h-72 w-full min-w-0" data-testid="market-trend-chart-wrapper">
-              <ResponsiveContainer width="100%" height="100%" minWidth={280} minHeight={240}>
-                <LineChart data={trendData}>
+            <div className="h-72 min-h-72 w-full overflow-x-auto" data-testid="market-trend-chart-wrapper">
+              {chartReady ? (
+                <LineChart width={560} height={260} data={trendData}>
                   <XAxis dataKey="date" />
                   <YAxis />
                   <Tooltip />
                   <Line dataKey="avg_rate" stroke="#F97316" strokeWidth={2} dot={false} />
                 </LineChart>
-              </ResponsiveContainer>
+              ) : (
+                <div className="h-full w-full rounded-lg bg-slate-50" data-testid="market-trend-loading-placeholder" />
+              )}
             </div>
           </CardContent>
         </Card>

@@ -1,10 +1,12 @@
-import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
+import { Cell, Pie, PieChart, Tooltip } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useChartReady } from "@/hooks/useChartReady";
 import { formatINR } from "@/utils/formatters";
 
 const chartColors = ["#0F172A", "#F97316", "#10B981", "#64748B"];
 
 export const CostPieChart = ({ costBreakdown }) => {
+  const chartReady = useChartReady();
   if (!costBreakdown) return null;
 
   const data = [
@@ -22,17 +24,19 @@ export const CostPieChart = ({ costBreakdown }) => {
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="h-64 min-h-64 w-full min-w-0" data-testid="cost-pie-chart-wrapper">
-          <ResponsiveContainer width="100%" height="100%" minWidth={280} minHeight={240}>
-            <PieChart>
-              <Pie data={data} dataKey="value" nameKey="name" outerRadius={92} innerRadius={48}>
+        <div className="h-64 min-h-64 w-full overflow-x-auto" data-testid="cost-pie-chart-wrapper">
+          {chartReady ? (
+            <PieChart width={360} height={240}>
+              <Pie data={data} dataKey="value" nameKey="name" outerRadius={92} innerRadius={48} cx="50%" cy="50%">
                 {data.map((entry, index) => (
                   <Cell key={entry.name} fill={chartColors[index % chartColors.length]} />
                 ))}
               </Pie>
               <Tooltip formatter={(value) => formatINR(Number(value))} />
             </PieChart>
-          </ResponsiveContainer>
+          ) : (
+            <div className="h-full w-full rounded-lg bg-slate-50" data-testid="cost-pie-chart-loading-placeholder" />
+          )}
         </div>
         <div className="mt-4 grid grid-cols-2 gap-3" data-testid="cost-pie-chart-legend">
           {data.map((item, index) => (
