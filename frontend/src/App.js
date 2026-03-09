@@ -5,6 +5,7 @@ import { ChatAssistant } from "@/components/ChatAssistant";
 import { TopNav } from "@/components/TopNav";
 import { BuildCalcProvider } from "@/context/BuildCalcContext";
 import AboutPage from "@/pages/AboutPage";
+import DrawingAnalyzerPage from "@/pages/DrawingAnalyzerPage";
 import EstimatePage from "@/pages/EstimatePage";
 import HomePage from "@/pages/HomePage";
 import LocalMarketRatesPage from "@/pages/LocalMarketRatesPage";
@@ -23,6 +24,7 @@ function App() {
             <Routes>
               <Route path="/" element={<HomePage />} />
               <Route path="/estimate" element={<EstimatePage />} />
+              <Route path="/drawing-analyzer" element={<DrawingAnalyzerPage />} />
               <Route path="/boq" element={<MaterialsPage />} />
               <Route path="/local-market-rates" element={<LocalMarketRatesPage />} />
               <Route path="/suppliers" element={<SuppliersPage />} />

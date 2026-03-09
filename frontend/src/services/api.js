@@ -27,3 +27,8 @@ export const submitSupplierRatesApi = (payload) => apiClient.post("/suppliers/ra
 export const getSupplierRatesApi = (limit = 50) => apiClient.get(`/suppliers/rates?limit=${limit}`);
 
 export const getWhatsappStatusApi = () => apiClient.get("/whatsapp/status");
+
+export const analyzeDrawingApi = (formData) =>
+  apiClient.post("/drawing-analyzer/analyze", formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });

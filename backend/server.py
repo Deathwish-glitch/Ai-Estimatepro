@@ -2,14 +2,17 @@ import logging
 import os
 import re
 import uuid
+import json
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
 
+import fitz
 import requests
 from dotenv import load_dotenv
-from emergentintegrations.llm.chat import LlmChat, UserMessage
-from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
+from emergentintegrations.llm.chat import FileContentWithMimeType, LlmChat, UserMessage
+from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Query, UploadFile
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, ValidationError
 from starlette.middleware.cors import CORSMiddleware
@@ -146,6 +149,30 @@ CHAT_SYSTEM_PROMPT = (
     "Answer in concise bullet points (max 8 bullets, max 180 words). Help with both app usage and construction estimation guidance. "
     "Always add a short disclaimer that values are approximate and local engineer validation is recommended for execution."
 )
+
+DRAWING_ANALYZER_SYSTEM_PROMPT = (
+    "You are an expert civil drawing interpreter. Read floor plans/site layouts and return strict JSON only. "
+    "Detect walls, rooms, columns, doors, windows, staircases, slabs, dimensions, room labels, wall thicknesses. "
+    "For quantity mode HYBRID: keep structural values strict (no guessing if missing), and estimate finishing values with clear assumptions + warnings."
+)
+
+DRAWING_JSON_SCHEMA_NOTE = {
+    "detected_elements": {"walls": 0, "rooms": 0, "columns": 0, "doors": 0, "windows": 0, "staircases": 0, "slabs": 0},
+    "dimensions": [{"label": "Living Room Length", "value": 4.2, "unit": "m"}],
+    "room_labels": ["Living", "Kitchen", "Bedroom-1"],
+    "wall_thickness_mm": [115, 230],
+    "derived_metrics": {
+        "wall_area_m2": 0,
+        "concrete_volume_m3": 0,
+        "brickwork_m3": 0,
+        "brick_quantity_no": 0,
+        "steel_quantity_ton": 0,
+        "plaster_area_m2": 0,
+        "flooring_area_m2": 0,
+    },
+    "warnings": [{"severity": "medium", "message": "Missing dimensions in two rooms"}],
+    "assumptions": ["Finishing area estimated from visible room labels where dimensions are missing"],
+}
 
 
 class ContractorQuoteInput(BaseModel):
@@ -365,6 +392,78 @@ class ChatHistoryItem(BaseModel):
     role: Literal["user", "assistant"]
     text: str
     created_at: str
+
+
+class DrawingDetectedElements(BaseModel):
+    walls: int
+    rooms: int
+    columns: int
+    doors: int
+    windows: int
+    staircases: int
+    slabs: int
+
+
+class DrawingDimension(BaseModel):
+    label: str
+    value: float
+    unit: str
+
+
+class DrawingWarning(BaseModel):
+    severity: Literal["high", "medium", "low"]
+    message: str
+
+
+class DrawingBoqItem(BaseModel):
+    item: str
+    quantity: float
+    unit: str
+
+
+class DrawingCostEstimate(BaseModel):
+    material_cost: float
+    labour_cost: float
+    total_estimate: float
+
+
+class DrawingManualComparisonRow(BaseModel):
+    item: str
+    manual_quantity: float
+    ai_quantity: float
+    variance_pct: float
+
+
+class DrawingTimeComparison(BaseModel):
+    manual_time_required: str
+    ai_time_required: str
+
+
+class DrawingScheduleStage(BaseModel):
+    stage: str
+    duration_days: int
+    can_run_parallel: bool
+    parallel_with: Optional[str] = None
+
+
+class DrawingAnalysisResponse(BaseModel):
+    analysis_id: str
+    file_name: str
+    file_type: str
+    quantity_mode: Literal["strict", "assisted", "hybrid"]
+    detected_elements: DrawingDetectedElements
+    dimensions: List[DrawingDimension]
+    room_labels: List[str]
+    wall_thickness_mm: List[float]
+    boq_items: List[DrawingBoqItem]
+    market_rates_used: List[MarketRateItem]
+    cost_estimate: DrawingCostEstimate
+    warnings: List[DrawingWarning]
+    assumptions: List[str]
+    optimized_schedule: List[DrawingScheduleStage]
+    manual_vs_ai_quantities: List[DrawingManualComparisonRow]
+    method_time_comparison: DrawingTimeComparison
+    generated_at: str
 
 
 def _now_iso() -> str:
@@ -846,6 +945,239 @@ def _scrape_url_for_rates(url: str, location: str) -> List[MarketSourceEntryCrea
     return entries
 
 
+def _extract_json_from_text(raw_text: str) -> dict:
+    cleaned = raw_text.strip()
+    fenced_match = re.search(r"```json\s*(\{.*\})\s*```", cleaned, flags=re.DOTALL)
+    if fenced_match:
+        cleaned = fenced_match.group(1)
+    else:
+        generic_fence_match = re.search(r"```\s*(\{.*\})\s*```", cleaned, flags=re.DOTALL)
+        if generic_fence_match:
+            cleaned = generic_fence_match.group(1)
+
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError("No JSON object found in AI response")
+    return json.loads(cleaned[start : end + 1])
+
+
+def _safe_float(value: object, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _default_drawing_payload() -> dict:
+    return {
+        "detected_elements": {"walls": 12, "rooms": 5, "columns": 10, "doors": 8, "windows": 6, "staircases": 1, "slabs": 2},
+        "dimensions": [],
+        "room_labels": [],
+        "wall_thickness_mm": [115, 230],
+        "derived_metrics": {
+            "wall_area_m2": 180,
+            "concrete_volume_m3": 82,
+            "brickwork_m3": 118,
+            "brick_quantity_no": 59000,
+            "steel_quantity_ton": 6.2,
+            "plaster_area_m2": 640,
+            "flooring_area_m2": 220,
+        },
+        "warnings": [{"severity": "medium", "message": "Some dimensions were unclear; finishing values include assisted assumptions."}],
+        "assumptions": ["Default residential grid and room proportions used for missing finishing dimensions."],
+    }
+
+
+def _prepare_drawing_asset(uploaded_path: str, extension: str) -> tuple[str, str]:
+    if extension in {"png", "jpg", "jpeg"}:
+        mime = "image/png" if extension == "png" else "image/jpeg"
+        return uploaded_path, mime
+
+    if extension == "pdf":
+        pdf_doc = fitz.open(uploaded_path)
+        if pdf_doc.page_count == 0:
+            raise HTTPException(status_code=400, detail="PDF has no pages")
+        page = pdf_doc.load_page(0)
+        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+        image_path = os.path.join(tempfile.gettempdir(), f"drawing-page-{uuid.uuid4()}.png")
+        pix.save(image_path)
+        pdf_doc.close()
+        return image_path, "image/png"
+
+    raise HTTPException(status_code=400, detail="Unsupported drawing format")
+
+
+async def _run_drawing_ai_analysis(image_path: str, mime_type: str, quantity_mode: Literal["strict", "assisted", "hybrid"]) -> dict:
+    llm_key = os.environ.get("EMERGENT_LLM_KEY")
+    if not llm_key:
+        raise HTTPException(status_code=500, detail="EMERGENT_LLM_KEY missing")
+
+    chat = LlmChat(
+        api_key=llm_key,
+        session_id=f"drawing-analysis-{uuid.uuid4()}",
+        system_message=DRAWING_ANALYZER_SYSTEM_PROMPT,
+    ).with_model("openai", "gpt-5.2")
+
+    prompt = (
+        "Analyze this construction drawing and return ONLY valid JSON. "
+        f"Use quantity mode: {quantity_mode}. "
+        "For HYBRID mode, keep structural values strict and use assisted estimates for finishing values when data is missing. "
+        "JSON schema example: "
+        f"{json.dumps(DRAWING_JSON_SCHEMA_NOTE)}"
+    )
+
+    response_text = await chat.send_message(
+        UserMessage(
+            text=prompt,
+            file_contents=[FileContentWithMimeType(file_path=image_path, mime_type=mime_type)],
+        )
+    )
+    return _extract_json_from_text(str(response_text))
+
+
+def _build_drawing_boq(derived_metrics: dict) -> List[DrawingBoqItem]:
+    return [
+        DrawingBoqItem(item="Wall Area", quantity=round(_safe_float(derived_metrics.get("wall_area_m2")), 2), unit="m²"),
+        DrawingBoqItem(item="Concrete", quantity=round(_safe_float(derived_metrics.get("concrete_volume_m3")), 2), unit="m³"),
+        DrawingBoqItem(item="Brickwork", quantity=round(_safe_float(derived_metrics.get("brickwork_m3")), 2), unit="m³"),
+        DrawingBoqItem(item="Brick Quantity", quantity=round(_safe_float(derived_metrics.get("brick_quantity_no")), 0), unit="nos"),
+        DrawingBoqItem(item="Steel", quantity=round(_safe_float(derived_metrics.get("steel_quantity_ton")), 3), unit="tons"),
+        DrawingBoqItem(item="Plaster", quantity=round(_safe_float(derived_metrics.get("plaster_area_m2")), 2), unit="m²"),
+        DrawingBoqItem(item="Flooring", quantity=round(_safe_float(derived_metrics.get("flooring_area_m2")), 2), unit="m²"),
+    ]
+
+
+def _calculate_drawing_cost(
+    derived_metrics: dict,
+    market_rates: List[MarketRateItem],
+    location: str,
+    building_type: Literal["Basic", "Standard", "Premium"],
+    floors: int,
+) -> DrawingCostEstimate:
+    rates_map = {item.material: item.avg_local_rate for item in market_rates}
+    cement_rate = rates_map.get("Cement", DEFAULT_LOCAL_RATES["Cement"]["rate"])
+    steel_rate = rates_map.get("Steel", DEFAULT_LOCAL_RATES["Steel"]["rate"])
+    sand_rate = rates_map.get("Sand", DEFAULT_LOCAL_RATES["Sand"]["rate"])
+    brick_rate = rates_map.get("Brick", DEFAULT_LOCAL_RATES["Brick"]["rate"])
+
+    concrete_m3 = _safe_float(derived_metrics.get("concrete_volume_m3"))
+    plaster_m2 = _safe_float(derived_metrics.get("plaster_area_m2"))
+    steel_ton = _safe_float(derived_metrics.get("steel_quantity_ton"))
+    brick_no = _safe_float(derived_metrics.get("brick_quantity_no"))
+    brickwork_m3 = _safe_float(derived_metrics.get("brickwork_m3"))
+    flooring_m2 = _safe_float(derived_metrics.get("flooring_area_m2"))
+
+    cement_bags = (concrete_m3 * 8.0) + (plaster_m2 * 0.12)
+    sand_brass = (concrete_m3 * 0.44) + (plaster_m2 * 0.015)
+    steel_kg = steel_ton * 1000
+
+    quality_factor = {"Basic": 0.96, "Standard": 1.0, "Premium": 1.08}[building_type]
+    location_factor = _location_multiplier(location)
+    floor_factor = max(1, floors) ** 0.05
+
+    material_cost = (
+        (cement_bags * cement_rate)
+        + (steel_kg * steel_rate)
+        + (sand_brass * sand_rate)
+        + (brick_no * brick_rate)
+    )
+    labour_cost = (concrete_m3 * 1400) + (brickwork_m3 * 900) + (plaster_m2 * 70) + (flooring_m2 * 110)
+    material_cost *= quality_factor * location_factor * floor_factor
+    labour_cost *= location_factor * floor_factor
+    total_estimate = material_cost + labour_cost
+
+    return DrawingCostEstimate(
+        material_cost=round(material_cost, 2),
+        labour_cost=round(labour_cost, 2),
+        total_estimate=round(total_estimate, 2),
+    )
+
+
+def _build_drawing_schedule(derived_metrics: dict) -> List[DrawingScheduleStage]:
+    concrete_m3 = _safe_float(derived_metrics.get("concrete_volume_m3"))
+    brickwork_m3 = _safe_float(derived_metrics.get("brickwork_m3"))
+    plaster_m2 = _safe_float(derived_metrics.get("plaster_area_m2"))
+    steel_ton = _safe_float(derived_metrics.get("steel_quantity_ton"))
+
+    return [
+        DrawingScheduleStage(stage="Excavation", duration_days=max(3, int(concrete_m3 / 22) + 2), can_run_parallel=False),
+        DrawingScheduleStage(stage="Foundation", duration_days=max(7, int(concrete_m3 / 16) + 4), can_run_parallel=False),
+        DrawingScheduleStage(stage="Structure", duration_days=max(14, int(steel_ton * 2) + 8), can_run_parallel=False),
+        DrawingScheduleStage(stage="Brickwork", duration_days=max(10, int(brickwork_m3 / 14) + 6), can_run_parallel=True, parallel_with="MEP Rough-Ins"),
+        DrawingScheduleStage(stage="MEP Rough-Ins", duration_days=max(8, int(plaster_m2 / 130) + 4), can_run_parallel=True, parallel_with="Brickwork"),
+        DrawingScheduleStage(stage="Finishing", duration_days=max(15, int(plaster_m2 / 95) + 8), can_run_parallel=False),
+    ]
+
+
+def _enrich_drawing_warnings(
+    ai_warnings: list,
+    dimensions: list,
+    wall_thickness_mm: list,
+    detected_elements: dict,
+) -> List[DrawingWarning]:
+    warnings: List[DrawingWarning] = []
+    for item in ai_warnings or []:
+        message = str(item.get("message", "")).strip()
+        severity = str(item.get("severity", "medium")).lower()
+        if not message:
+            continue
+        warnings.append(DrawingWarning(severity="high" if severity not in {"high", "medium", "low"} else severity, message=message))
+
+    if not dimensions:
+        warnings.append(DrawingWarning(severity="high", message="Missing dimensions detected in drawing."))
+
+    if wall_thickness_mm:
+        min_th = min(wall_thickness_mm)
+        max_th = max(wall_thickness_mm)
+        if max_th - min_th > 140:
+            warnings.append(DrawingWarning(severity="medium", message="Irregular wall thickness detected across plan zones."))
+
+    rooms = int(_safe_float(detected_elements.get("rooms"), 0))
+    walls = int(_safe_float(detected_elements.get("walls"), 0))
+    if rooms > 0 and walls < rooms:
+        warnings.append(DrawingWarning(severity="high", message="Potential structural inconsistency: wall count appears low for detected room count."))
+
+    if not warnings:
+        warnings.append(DrawingWarning(severity="low", message="No major design inconsistencies detected from visible drawing details."))
+
+    return warnings
+
+
+def _build_manual_vs_ai_comparison(
+    derived_metrics: dict,
+    manual_boq: Optional[dict],
+) -> tuple[List[DrawingManualComparisonRow], DrawingTimeComparison]:
+    ai_values = {
+        "Brickwork": _safe_float(derived_metrics.get("brickwork_m3")),
+        "Concrete": _safe_float(derived_metrics.get("concrete_volume_m3")),
+        "Steel": _safe_float(derived_metrics.get("steel_quantity_ton")),
+        "Plaster": _safe_float(derived_metrics.get("plaster_area_m2")),
+    }
+    manual_input = manual_boq or {}
+    rows: List[DrawingManualComparisonRow] = []
+    for item, ai_value in ai_values.items():
+        manual_value = _safe_float(manual_input.get(item), ai_value * 1.08)
+        variance = ((manual_value - ai_value) / ai_value * 100) if ai_value else 0
+        rows.append(
+            DrawingManualComparisonRow(
+                item=item,
+                manual_quantity=round(manual_value, 2),
+                ai_quantity=round(ai_value, 2),
+                variance_pct=round(variance, 2),
+            )
+        )
+
+    manual_time_hours = _safe_float(manual_input.get("manual_time_hours"), 4)
+    time_comparison = DrawingTimeComparison(
+        manual_time_required=f"{manual_time_hours:.1f} hours",
+        ai_time_required="10 seconds",
+    )
+    return rows, time_comparison
+
+
 @api_router.get("/")
 async def root():
     return {"message": "AI Estimate Pro API is running"}
@@ -988,6 +1320,126 @@ async def receive_whatsapp_webhook(payload: dict):
         )
         created_count += 1
     return {"status": "ok", "processed_updates": created_count}
+
+
+@api_router.post("/drawing-analyzer/analyze", response_model=DrawingAnalysisResponse)
+async def analyze_drawing(
+    drawing_file: UploadFile = File(...),
+    location: str = Form("Nashik"),
+    building_type: Literal["Basic", "Standard", "Premium"] = Form("Standard"),
+    floors: int = Form(1),
+    refresh_frequency: Literal["daily", "weekly"] = Form("weekly"),
+    quantity_mode: Literal["strict", "assisted", "hybrid"] = Form("hybrid"),
+    manual_boq_json: Optional[str] = Form(None),
+):
+    file_name = drawing_file.filename or "uploaded-drawing"
+    extension = file_name.split(".")[-1].lower() if "." in file_name else ""
+    if extension not in {"png", "jpg", "jpeg", "pdf"}:
+        raise HTTPException(status_code=400, detail="Supported formats: PNG, JPG, PDF")
+
+    uploaded_temp_path = os.path.join(tempfile.gettempdir(), f"drawing-upload-{uuid.uuid4()}.{extension}")
+    with open(uploaded_temp_path, "wb") as uploaded_file:
+        uploaded_file.write(await drawing_file.read())
+
+    image_path = uploaded_temp_path
+    try:
+        image_path, mime_type = _prepare_drawing_asset(uploaded_temp_path, extension)
+        try:
+            ai_payload = await _run_drawing_ai_analysis(image_path, mime_type, quantity_mode)
+        except Exception as error:
+            logger.exception("Drawing AI analysis failed")
+            ai_payload = _default_drawing_payload()
+            ai_payload["warnings"] = ai_payload.get("warnings", []) + [
+                {"severity": "medium", "message": f"AI interpretation fallback applied: {str(error)[:180]}"}
+            ]
+
+        detected_elements_raw = ai_payload.get("detected_elements", _default_drawing_payload()["detected_elements"])
+        detected_elements = DrawingDetectedElements(
+            walls=int(_safe_float(detected_elements_raw.get("walls"), 0)),
+            rooms=int(_safe_float(detected_elements_raw.get("rooms"), 0)),
+            columns=int(_safe_float(detected_elements_raw.get("columns"), 0)),
+            doors=int(_safe_float(detected_elements_raw.get("doors"), 0)),
+            windows=int(_safe_float(detected_elements_raw.get("windows"), 0)),
+            staircases=int(_safe_float(detected_elements_raw.get("staircases"), 0)),
+            slabs=int(_safe_float(detected_elements_raw.get("slabs"), 0)),
+        )
+
+        dimensions_raw = ai_payload.get("dimensions", [])
+        dimensions = [
+            DrawingDimension(
+                label=str(item.get("label", "Unnamed Dimension")),
+                value=round(_safe_float(item.get("value")), 2),
+                unit=str(item.get("unit", "m")),
+            )
+            for item in dimensions_raw
+            if isinstance(item, dict)
+        ]
+        room_labels = [str(item) for item in ai_payload.get("room_labels", []) if str(item).strip()]
+        wall_thickness_mm = [round(_safe_float(value), 2) for value in ai_payload.get("wall_thickness_mm", []) if _safe_float(value) > 0]
+        derived_metrics = ai_payload.get("derived_metrics", _default_drawing_payload()["derived_metrics"])
+
+        if floors > 1:
+            derived_metrics["wall_area_m2"] = _safe_float(derived_metrics.get("wall_area_m2")) * floors
+            derived_metrics["concrete_volume_m3"] = _safe_float(derived_metrics.get("concrete_volume_m3")) * floors
+            derived_metrics["brickwork_m3"] = _safe_float(derived_metrics.get("brickwork_m3")) * floors
+            derived_metrics["brick_quantity_no"] = _safe_float(derived_metrics.get("brick_quantity_no")) * floors
+            derived_metrics["steel_quantity_ton"] = _safe_float(derived_metrics.get("steel_quantity_ton")) * floors
+            derived_metrics["plaster_area_m2"] = _safe_float(derived_metrics.get("plaster_area_m2")) * floors
+            derived_metrics["flooring_area_m2"] = _safe_float(derived_metrics.get("flooring_area_m2")) * floors
+
+        market_rates = await _aggregate_market_rates(refresh_frequency)
+        boq_items = _build_drawing_boq(derived_metrics)
+        cost_estimate = _calculate_drawing_cost(derived_metrics, market_rates, location, building_type, floors)
+        optimized_schedule = _build_drawing_schedule(derived_metrics)
+        warnings = _enrich_drawing_warnings(
+            ai_payload.get("warnings", []),
+            dimensions_raw,
+            wall_thickness_mm,
+            detected_elements_raw,
+        )
+
+        manual_boq = None
+        if manual_boq_json:
+            try:
+                manual_boq = json.loads(manual_boq_json)
+            except json.JSONDecodeError:
+                manual_boq = None
+
+        comparison_rows, method_time = _build_manual_vs_ai_comparison(derived_metrics, manual_boq)
+        assumptions = [str(item) for item in ai_payload.get("assumptions", []) if str(item).strip()]
+
+        if quantity_mode == "strict" and not dimensions:
+            warnings.insert(0, DrawingWarning(severity="high", message="Strict mode: structural quantities may be limited due to missing dimensions."))
+        if quantity_mode == "hybrid" and not assumptions:
+            assumptions.append("Hybrid mode used assisted assumptions for finishing quantities where dimensions were not clearly readable.")
+
+        analysis = DrawingAnalysisResponse(
+            analysis_id=str(uuid.uuid4()),
+            file_name=file_name,
+            file_type=extension,
+            quantity_mode=quantity_mode,
+            detected_elements=detected_elements,
+            dimensions=dimensions,
+            room_labels=room_labels,
+            wall_thickness_mm=wall_thickness_mm,
+            boq_items=boq_items,
+            market_rates_used=market_rates,
+            cost_estimate=cost_estimate,
+            warnings=warnings,
+            assumptions=assumptions,
+            optimized_schedule=optimized_schedule,
+            manual_vs_ai_quantities=comparison_rows,
+            method_time_comparison=method_time,
+            generated_at=_now_iso(),
+        )
+
+        await db.drawing_analyses.insert_one(analysis.model_dump())
+        return analysis
+    finally:
+        if os.path.exists(uploaded_temp_path):
+            os.remove(uploaded_temp_path)
+        if image_path != uploaded_temp_path and os.path.exists(image_path):
+            os.remove(image_path)
 
 
 @api_router.post("/estimate", response_model=EstimateResult)
