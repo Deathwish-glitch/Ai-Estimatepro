@@ -7,8 +7,11 @@ import { BuildCalcProvider } from "@/context/BuildCalcContext";
 import AboutPage from "@/pages/AboutPage";
 import EstimatePage from "@/pages/EstimatePage";
 import HomePage from "@/pages/HomePage";
+import LocalMarketRatesPage from "@/pages/LocalMarketRatesPage";
 import MaterialsPage from "@/pages/MaterialsPage";
+import ReportsPage from "@/pages/ReportsPage";
 import SchedulePage from "@/pages/SchedulePage";
+import SuppliersPage from "@/pages/SuppliersPage";
 
 function App() {
   return (
@@ -20,6 +23,10 @@ function App() {
             <Routes>
               <Route path="/" element={<HomePage />} />
               <Route path="/estimate" element={<EstimatePage />} />
+              <Route path="/boq" element={<MaterialsPage />} />
+              <Route path="/local-market-rates" element={<LocalMarketRatesPage />} />
+              <Route path="/suppliers" element={<SuppliersPage />} />
+              <Route path="/reports" element={<ReportsPage />} />
               <Route path="/materials" element={<MaterialsPage />} />
               <Route path="/schedule" element={<SchedulePage />} />
               <Route path="/about" element={<AboutPage />} />

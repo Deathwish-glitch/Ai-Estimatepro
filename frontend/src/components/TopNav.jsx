@@ -4,9 +4,10 @@ import { NavLink } from "react-router-dom";
 const navItems = [
   { label: "Home", path: "/", testId: "nav-home-link", end: true },
   { label: "Estimate", path: "/estimate", testId: "nav-estimate-link", end: false },
-  { label: "Materials", path: "/materials", testId: "nav-materials-link", end: false },
-  { label: "Schedule", path: "/schedule", testId: "nav-schedule-link", end: false },
-  { label: "About", path: "/about", testId: "nav-about-link", end: false },
+  { label: "BOQ", path: "/boq", testId: "nav-boq-link", end: false },
+  { label: "Local Market Rates", path: "/local-market-rates", testId: "nav-local-market-rates-link", end: false },
+  { label: "Suppliers", path: "/suppliers", testId: "nav-suppliers-link", end: false },
+  { label: "Reports", path: "/reports", testId: "nav-reports-link", end: false },
 ];
 
 export const TopNav = () => {

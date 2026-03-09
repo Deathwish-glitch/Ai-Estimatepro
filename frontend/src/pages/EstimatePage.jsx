@@ -21,9 +21,13 @@ const defaultFormState = {
   built_up_area_sqft: "900",
   floors: "1",
   building_type: "Standard",
-  location: "Tier 2 City",
+  location: "Nashik",
   labour_cost_adjustment_pct: "0",
   material_price_variation_pct: "0",
+  refresh_frequency: "weekly",
+  contractor_material_cost: "",
+  contractor_labour_cost: "",
+  contractor_total_cost: "",
 };
 
 const buildingTypes = ["Basic", "Standard", "Premium"];
@@ -36,6 +40,12 @@ const getNumericInputPayload = (formData) => ({
   location: formData.location,
   labour_cost_adjustment_pct: Number(formData.labour_cost_adjustment_pct),
   material_price_variation_pct: Number(formData.material_price_variation_pct),
+  refresh_frequency: formData.refresh_frequency,
+  contractor_quote: {
+    material_cost: formData.contractor_material_cost ? Number(formData.contractor_material_cost) : null,
+    labour_cost: formData.contractor_labour_cost ? Number(formData.contractor_labour_cost) : null,
+    total_cost: formData.contractor_total_cost ? Number(formData.contractor_total_cost) : null,
+  },
 });
 
 export default function EstimatePage() {
@@ -57,6 +67,9 @@ export default function EstimatePage() {
   const detailedMaterials = latestEstimate?.detailed_materials || [];
   const scheduleData = latestEstimate?.schedule || [];
   const suggestionData = latestEstimate?.suggestions || [];
+  const localMarketRates = latestEstimate?.local_market_rates || [];
+  const comparisonRows = latestEstimate?.contractor_comparison?.rows || [];
+  const optimizedSchedule = latestEstimate?.optimized_schedule || [];
 
   useEffect(() => {
     if (!latestInput) return;
@@ -68,6 +81,10 @@ export default function EstimatePage() {
       location: latestInput.location,
       labour_cost_adjustment_pct: String(latestInput.labour_cost_adjustment_pct),
       material_price_variation_pct: String(latestInput.material_price_variation_pct),
+      refresh_frequency: latestInput.refresh_frequency || "weekly",
+      contractor_material_cost: latestInput.contractor_quote?.material_cost ? String(latestInput.contractor_quote.material_cost) : "",
+      contractor_labour_cost: latestInput.contractor_quote?.labour_cost ? String(latestInput.contractor_quote.labour_cost) : "",
+      contractor_total_cost: latestInput.contractor_quote?.total_cost ? String(latestInput.contractor_quote.total_cost) : "",
     });
   }, [latestInput]);
 
@@ -161,6 +178,29 @@ export default function EstimatePage() {
       startY: doc.lastAutoTable.finalY + 10,
       head: [["Schedule Phase", "Week Range", "Milestone"]],
       body: scheduleData.map((item) => [item.phase, `Week ${item.start_week} - ${item.end_week}`, item.milestone || "Planned completion"]),
+    });
+
+    autoTable(doc, {
+      startY: doc.lastAutoTable.finalY + 10,
+      head: [["Material", "Avg Local Rate", "Unit", "Sources"]],
+      body: localMarketRates.map((item) => [item.material, formatINR(item.avg_local_rate), item.unit, String(item.source_count)]),
+    });
+
+    autoTable(doc, {
+      startY: doc.lastAutoTable.finalY + 10,
+      head: [["Category", "Contractor", "AI Estimate", "Savings"]],
+      body: comparisonRows.map((row) => [
+        row.category,
+        formatINR(row.contractor_cost),
+        formatINR(row.ai_estimate_cost),
+        formatINR(row.savings),
+      ]),
+    });
+
+    autoTable(doc, {
+      startY: doc.lastAutoTable.finalY + 10,
+      head: [["Optimized Stage", "Duration (days)", "Parallel"]],
+      body: optimizedSchedule.map((item) => [item.stage, String(item.duration_days), item.can_run_parallel ? `Yes (${item.parallel_with || ""})` : "No"]),
     });
 
     doc.text("Construction Tips", 14, doc.lastAutoTable.finalY + 14);
@@ -298,6 +338,57 @@ export default function EstimatePage() {
                   onChange={(event) => updateField("material_price_variation_pct", event.target.value)}
                 />
               </div>
+
+              <div>
+                <label className="mb-2 block text-sm font-medium text-slate-700" data-testid="refresh-frequency-label">
+                  Market Rate Refresh
+                </label>
+                <Select value={formData.refresh_frequency} onValueChange={(value) => updateField("refresh_frequency", value)}>
+                  <SelectTrigger data-testid="refresh-frequency-select-trigger">
+                    <SelectValue placeholder="Refresh cycle" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="daily" data-testid="refresh-frequency-option-daily">Daily</SelectItem>
+                    <SelectItem value="weekly" data-testid="refresh-frequency-option-weekly">Weekly</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm font-medium text-slate-700" data-testid="contractor-material-cost-label">
+                  Contractor Material Cost (optional)
+                </label>
+                <Input
+                  type="number"
+                  value={formData.contractor_material_cost}
+                  data-testid="contractor-material-cost-input"
+                  onChange={(event) => updateField("contractor_material_cost", event.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm font-medium text-slate-700" data-testid="contractor-labour-cost-label">
+                  Contractor Labour Cost (optional)
+                </label>
+                <Input
+                  type="number"
+                  value={formData.contractor_labour_cost}
+                  data-testid="contractor-labour-cost-input"
+                  onChange={(event) => updateField("contractor_labour_cost", event.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm font-medium text-slate-700" data-testid="contractor-total-cost-label">
+                  Contractor Total Cost (optional)
+                </label>
+                <Input
+                  type="number"
+                  value={formData.contractor_total_cost}
+                  data-testid="contractor-total-cost-input"
+                  onChange={(event) => updateField("contractor_total_cost", event.target.value)}
+                />
+              </div>
             </div>
 
             <div className="flex flex-wrap gap-3" data-testid="estimate-actions">
@@ -407,6 +498,98 @@ export default function EstimatePage() {
                       <TableCell className="font-mono" data-testid={`cost-value-${row[0].toLowerCase().replace(/\s+/g, "-")}`}>
                         {row[1]}
                       </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+
+          <Card className="border-slate-200 bg-white shadow-sm" data-testid="contractor-comparison-card">
+            <CardHeader>
+              <CardTitle className="text-2xl" data-testid="contractor-comparison-title">
+                Contractor vs AI Estimate
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Table data-testid="contractor-comparison-table">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead data-testid="comparison-column-category">Category</TableHead>
+                    <TableHead data-testid="comparison-column-contractor">Contractor</TableHead>
+                    <TableHead data-testid="comparison-column-ai">AI Estimate</TableHead>
+                    <TableHead data-testid="comparison-column-savings">Savings</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {comparisonRows.map((row) => (
+                    <TableRow key={row.category} data-testid={`comparison-row-${row.category.toLowerCase()}`}>
+                      <TableCell>{row.category}</TableCell>
+                      <TableCell className="font-mono">{formatINR(row.contractor_cost)}</TableCell>
+                      <TableCell className="font-mono">{formatINR(row.ai_estimate_cost)}</TableCell>
+                      <TableCell className="font-mono text-emerald-600">{formatINR(row.savings)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              <p className="mt-3 text-sm text-slate-600" data-testid="comparison-total-savings-text">
+                Total potential savings: <span className="font-mono text-emerald-600">{formatINR(latestEstimate?.contractor_comparison?.total_savings || 0)}</span>
+                {" "}({latestEstimate?.estimated_savings_pct || 0}%)
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card className="border-slate-200 bg-white shadow-sm" data-testid="local-market-rates-card">
+            <CardHeader>
+              <CardTitle className="text-2xl" data-testid="local-market-rates-title">
+                Local Market Rates (Nashik)
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Table data-testid="local-market-rates-table">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Material</TableHead>
+                    <TableHead>Avg Local Rate</TableHead>
+                    <TableHead>Unit</TableHead>
+                    <TableHead>Sources</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {localMarketRates.map((item) => (
+                    <TableRow key={item.material} data-testid={`local-market-row-${item.material.toLowerCase()}`}>
+                      <TableCell>{item.material}</TableCell>
+                      <TableCell className="font-mono">{formatINR(item.avg_local_rate)}</TableCell>
+                      <TableCell>{item.unit}</TableCell>
+                      <TableCell className="font-mono">{item.source_count}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+
+          <Card className="border-slate-200 bg-white shadow-sm" data-testid="optimized-schedule-card">
+            <CardHeader>
+              <CardTitle className="text-2xl" data-testid="optimized-schedule-title">
+                Construction Speed Optimization
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Table data-testid="optimized-schedule-table">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Stage</TableHead>
+                    <TableHead>Duration</TableHead>
+                    <TableHead>Parallel Work</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {optimizedSchedule.map((item) => (
+                    <TableRow key={item.stage} data-testid={`optimized-stage-${item.stage.toLowerCase().replace(/\s+/g, "-")}`}>
+                      <TableCell>{item.stage}</TableCell>
+                      <TableCell className="font-mono">{item.duration_days} days</TableCell>
+                      <TableCell>{item.can_run_parallel ? `Yes (${item.parallel_with || "planned"})` : "No"}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

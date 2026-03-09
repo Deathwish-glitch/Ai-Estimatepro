@@ -39,6 +39,8 @@ export const BuildCalcProvider = ({ children }) => {
     try {
       const response = await getProjectsApi();
       setSavedProjects(response.data || []);
+    } catch {
+      setSavedProjects([]);
     } finally {
       setLoadingProjects(false);
     }

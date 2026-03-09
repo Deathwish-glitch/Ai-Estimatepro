@@ -52,9 +52,9 @@ export default function HomePage() {
                 Start Estimate <ArrowRight size={16} />
               </Button>
             </Link>
-            <Link to="/materials" data-testid="hero-view-materials-link">
+            <Link to="/boq" data-testid="hero-view-materials-link">
               <Button variant="outline" className="rounded-full border-slate-300 px-6 transition-colors duration-200" data-testid="hero-view-materials-button">
-                View Materials
+                View BOQ
               </Button>
             </Link>
           </div>

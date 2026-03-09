@@ -1,13 +1,15 @@
 import logging
 import os
+import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
 
+import requests
 from dotenv import load_dotenv
-from fastapi import APIRouter, FastAPI, HTTPException
 from emergentintegrations.llm.chat import LlmChat, UserMessage
+from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, ValidationError
 from starlette.middleware.cors import CORSMiddleware
@@ -22,16 +24,29 @@ db = client[os.environ["DB_NAME"]]
 app = FastAPI(title="AI Estimate Pro API")
 api_router = APIRouter(prefix="/api")
 
-BASE_RATE_BY_TYPE: Dict[str, float] = {
-    "Basic": 1800,
-    "Standard": 2300,
-    "Premium": 3000,
+BASE_RATE_BY_TYPE: Dict[str, float] = {"Basic": 1800, "Standard": 2300, "Premium": 3000}
+MATERIAL_FACTOR_BY_TYPE: Dict[str, float] = {"Basic": 0.95, "Standard": 1.0, "Premium": 1.08}
+
+DEFAULT_LOCAL_RATES = {
+    "Cement": {"rate": 382.0, "unit": "bag"},
+    "Steel": {"rate": 61.0, "unit": "kg"},
+    "Sand": {"rate": 3350.0, "unit": "brass"},
+    "Brick": {"rate": 9.2, "unit": "nos"},
 }
 
-MATERIAL_FACTOR_BY_TYPE: Dict[str, float] = {
-    "Basic": 0.95,
-    "Standard": 1.0,
-    "Premium": 1.08,
+MATERIAL_ALIASES = {
+    "cement": "Cement",
+    "opc cement": "Cement",
+    "ppc cement": "Cement",
+    "steel": "Steel",
+    "tmt": "Steel",
+    "tmt steel": "Steel",
+    "sand": "Sand",
+    "river sand": "Sand",
+    "msand": "Sand",
+    "m-sand": "Sand",
+    "brick": "Brick",
+    "bricks": "Brick",
 }
 
 DETAILED_MATERIAL_LIBRARY = [
@@ -70,87 +85,55 @@ DETAILED_MATERIAL_LIBRARY = [
 SCHEDULE_PHASES = [
     {
         "name": "Pre-Construction Setup",
-        "tasks": [
-            "Site survey and layout marking",
-            "Temporary utilities setup",
-            "Material storage and safety zoning",
-        ],
+        "tasks": ["Site survey and layout marking", "Temporary utilities setup", "Material storage and safety zoning"],
         "milestone": "Site ready for excavation",
         "crew_base": 6,
     },
     {
         "name": "Excavation and Earthwork",
-        "tasks": [
-            "Excavation to design depth",
-            "Soil disposal and leveling",
-            "Compaction checks",
-        ],
+        "tasks": ["Excavation to design depth", "Soil disposal and leveling", "Compaction checks"],
         "milestone": "Excavation approved",
         "crew_base": 10,
     },
     {
         "name": "Foundation and Plinth",
-        "tasks": [
-            "PCC bed and footing reinforcement",
-            "Footing and plinth concrete",
-            "Anti-termite and waterproofing treatment",
-        ],
+        "tasks": ["PCC bed and footing reinforcement", "Footing and plinth concrete", "Anti-termite and waterproofing treatment"],
         "milestone": "Plinth beam completed",
         "crew_base": 12,
     },
     {
         "name": "RCC Frame and Slabs",
-        "tasks": [
-            "Column casting and shuttering",
-            "Beam and slab reinforcement",
-            "Concrete pouring and curing cycle",
-        ],
+        "tasks": ["Column casting and shuttering", "Beam and slab reinforcement", "Concrete pouring and curing cycle"],
         "milestone": "Structural frame topped out",
         "crew_base": 16,
     },
     {
         "name": "Masonry and Roofing",
-        "tasks": [
-            "External and partition block work",
-            "Lintel and sill casting",
-            "Roof weatherproof treatment",
-        ],
+        "tasks": ["External and partition block work", "Lintel and sill casting", "Roof weatherproof treatment"],
         "milestone": "Shell construction closed",
         "crew_base": 14,
     },
     {
         "name": "MEP Rough-Ins",
-        "tasks": [
-            "Electrical conduit and box fixing",
-            "Plumbing and drainage routing",
-            "Pressure and leakage pre-tests",
-        ],
+        "tasks": ["Electrical conduit and box fixing", "Plumbing and drainage routing", "Pressure and leakage pre-tests"],
         "milestone": "MEP rough-ins approved",
         "crew_base": 10,
     },
     {
         "name": "Finishing and Fixtures",
-        "tasks": [
-            "Plastering, putty and primer",
-            "Flooring and wall tile works",
-            "Painting, carpentry and fixture installation",
-        ],
+        "tasks": ["Plastering, putty and primer", "Flooring and wall tile works", "Painting, carpentry and fixture installation"],
         "milestone": "Interior finishes complete",
         "crew_base": 15,
     },
     {
         "name": "Testing and Handover",
-        "tasks": [
-            "Final electrical and plumbing testing",
-            "Snag corrections and cleaning",
-            "Handover walkthrough and documentation",
-        ],
+        "tasks": ["Final electrical and plumbing testing", "Snag corrections and cleaning", "Handover walkthrough and documentation"],
         "milestone": "Project ready for occupancy",
         "crew_base": 6,
     },
 ]
-SCHEDULE_WEIGHTS = [0.06, 0.12, 0.16, 0.24, 0.14, 0.11, 0.13, 0.04]
 
+SCHEDULE_WEIGHTS = [0.06, 0.12, 0.16, 0.24, 0.14, 0.11, 0.13, 0.04]
 CONSTRUCTION_TIPS = [
     "Proper curing improves concrete strength and durability.",
     "Plan plumbing and electrical sleeves before slab casting.",
@@ -165,6 +148,12 @@ CHAT_SYSTEM_PROMPT = (
 )
 
 
+class ContractorQuoteInput(BaseModel):
+    material_cost: Optional[float] = Field(default=None, ge=0)
+    labour_cost: Optional[float] = Field(default=None, ge=0)
+    total_cost: Optional[float] = Field(default=None, ge=0)
+
+
 class EstimateInput(BaseModel):
     plot_size_sqft: float = Field(gt=0)
     built_up_area_sqft: float = Field(gt=0)
@@ -173,6 +162,8 @@ class EstimateInput(BaseModel):
     location: str = Field(min_length=2, max_length=100)
     labour_cost_adjustment_pct: float = Field(default=0, ge=-30, le=60)
     material_price_variation_pct: float = Field(default=0, ge=-30, le=60)
+    refresh_frequency: Literal["daily", "weekly"] = "weekly"
+    contractor_quote: Optional[ContractorQuoteInput] = None
 
 
 class CostBreakdown(BaseModel):
@@ -207,6 +198,45 @@ class SchedulePhase(BaseModel):
     expected_crew_size: int
 
 
+class OptimizedScheduleStage(BaseModel):
+    stage: str
+    duration_days: int
+    can_run_parallel: bool
+    parallel_with: Optional[str] = None
+
+
+class MarketRateItem(BaseModel):
+    material: str
+    avg_local_rate: float
+    unit: str
+    source_count: int
+    cheapest_supplier: Optional[str] = None
+    cheapest_rate: Optional[float] = None
+
+
+class SupplierRecommendation(BaseModel):
+    material: str
+    supplier_name: str
+    location: str
+    rate: float
+    unit: str
+
+
+class ComparisonRow(BaseModel):
+    category: str
+    contractor_cost: float
+    ai_estimate_cost: float
+    savings: float
+
+
+class ContractorComparison(BaseModel):
+    rows: List[ComparisonRow]
+    contractor_total: float
+    ai_total: float
+    total_savings: float
+    savings_percent: float
+
+
 class EstimateResult(BaseModel):
     project_area_sqft: float
     duration_weeks: int
@@ -214,6 +244,11 @@ class EstimateResult(BaseModel):
     materials: List[MaterialQuantity]
     detailed_materials: List[DetailedMaterialItem]
     schedule: List[SchedulePhase]
+    optimized_schedule: List[OptimizedScheduleStage]
+    local_market_rates: List[MarketRateItem]
+    recommended_suppliers: List[SupplierRecommendation]
+    contractor_comparison: ContractorComparison
+    estimated_savings_pct: float
     tips: List[str]
     suggestions: List[str]
 
@@ -229,6 +264,83 @@ class SavedProject(BaseModel):
     created_at: str
     input_data: EstimateInput
     result: EstimateResult
+
+
+class SupplierMaterialPrice(BaseModel):
+    material: str
+    rate: float = Field(gt=0)
+    unit: str
+
+
+class SupplierRateSubmission(BaseModel):
+    supplier_name: str = Field(min_length=2, max_length=80)
+    location: str = Field(min_length=2, max_length=80)
+    prices: List[SupplierMaterialPrice] = Field(min_items=1)
+
+
+class SupplierRateRecord(BaseModel):
+    id: str
+    supplier_name: str
+    location: str
+    prices: List[SupplierMaterialPrice]
+    source_type: Literal["supplier_manual", "whatsapp"]
+    updated_at: str
+
+
+class MarketSourceEntryCreate(BaseModel):
+    source_type: Literal["supplier_manual", "website", "government", "whatsapp"]
+    supplier_name: str = Field(default="Unknown", min_length=2, max_length=120)
+    location: str = Field(default="Nashik", min_length=2, max_length=100)
+    material: str
+    rate: float = Field(gt=0)
+    unit: str
+    source_reference: Optional[str] = Field(default=None, max_length=300)
+
+
+class MarketSourceEntry(BaseModel):
+    id: str
+    source_type: str
+    supplier_name: str
+    location: str
+    material: str
+    rate: float
+    unit: str
+    normalized_material: str
+    normalized_rate: float
+    normalized_unit: str
+    source_reference: Optional[str]
+    collected_at: str
+
+
+class MarketRatesResponse(BaseModel):
+    refresh_frequency: Literal["daily", "weekly"]
+    last_updated: str
+    items: List[MarketRateItem]
+
+
+class MarketSettings(BaseModel):
+    refresh_frequency: Literal["daily", "weekly"]
+
+
+class TrendPoint(BaseModel):
+    date: str
+    avg_rate: float
+
+
+class MaterialTrendResponse(BaseModel):
+    material: str
+    unit: str
+    points: List[TrendPoint]
+
+
+class ScrapeRequest(BaseModel):
+    urls: List[str] = Field(min_items=1, max_items=10)
+    location: str = Field(default="Nashik")
+
+
+class ScrapeResponse(BaseModel):
+    processed_urls: int
+    created_entries: int
 
 
 class ChatSessionResponse(BaseModel):
@@ -255,8 +367,41 @@ class ChatHistoryItem(BaseModel):
     created_at: str
 
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _normalize_material_name(material: str) -> str:
+    normalized = re.sub(r"\s+", " ", material.strip().lower())
+    return MATERIAL_ALIASES.get(normalized, material.strip().title())
+
+
+def _convert_rate_to_base(material: str, rate: float, unit: str) -> tuple[float, str]:
+    normalized_material = _normalize_material_name(material)
+    normalized_unit = unit.strip().lower()
+    if normalized_material == "Steel" and normalized_unit in {"ton", "tons", "tonne", "tonnes"}:
+        return rate / 1000, "kg"
+    if normalized_material == "Steel" and normalized_unit in {"quintal", "qtl"}:
+        return rate / 100, "kg"
+    if normalized_material == "Sand" and normalized_unit in {"m3", "m³", "cum"}:
+        return rate * 2.83, "brass"
+    if normalized_material == "Brick" and normalized_unit in {"1000 nos", "thousand"}:
+        return rate / 1000, "nos"
+    if normalized_material == "Cement" and normalized_unit in {"bag", "bags"}:
+        return rate, "bag"
+    if normalized_material == "Steel" and normalized_unit == "kg":
+        return rate, "kg"
+    if normalized_material == "Sand" and normalized_unit == "brass":
+        return rate, "brass"
+    if normalized_material == "Brick" and normalized_unit in {"nos", "no"}:
+        return rate, "nos"
+    return rate, unit
+
+
 def _location_multiplier(location: str) -> float:
     normalized = location.strip().lower()
+    if "nashik" in normalized:
+        return 0.98
     if any(token in normalized for token in ["metro", "urban", "mumbai", "delhi", "bengaluru"]):
         return 1.12
     if any(token in normalized for token in ["village", "rural", "tier 3"]):
@@ -267,14 +412,12 @@ def _location_multiplier(location: str) -> float:
 def _allocate_phase_weeks(duration_weeks: int) -> List[int]:
     weeks = [max(1, int(duration_weeks * weight)) for weight in SCHEDULE_WEIGHTS]
     delta = duration_weeks - sum(weeks)
-
     while delta > 0:
         for idx in range(len(weeks)):
             weeks[idx] += 1
             delta -= 1
             if delta == 0:
                 break
-
     while delta < 0:
         for idx in reversed(range(len(weeks))):
             if weeks[idx] > 1:
@@ -296,7 +439,6 @@ def _round_quantity(value: float, unit: str) -> float:
 def _build_detailed_materials(effective_area: float, building_type: str) -> List[DetailedMaterialItem]:
     type_factor = MATERIAL_FACTOR_BY_TYPE[building_type]
     detailed: List[DetailedMaterialItem] = []
-
     for category, name, coefficient, unit, note in DETAILED_MATERIAL_LIBRARY:
         base_quantity = effective_area * coefficient * type_factor
         detailed.append(
@@ -311,54 +453,277 @@ def _build_detailed_materials(effective_area: float, building_type: str) -> List
     return detailed
 
 
-def _build_suggestions(input_data: EstimateInput, duration_weeks: int, cost_breakdown: CostBreakdown) -> List[str]:
-    suggestions = [
-        "Keep a 7% contingency buffer for market price and on-site variation.",
-        "Plan procurement in batches by phase to reduce material wastage and theft risk.",
-        "Create a weekly review checklist for quality, safety, and budget tracking.",
+def _extract_primary_material_quantities(detailed_materials: List[DetailedMaterialItem]) -> Dict[str, float]:
+    cement_qty = sum(item.quantity for item in detailed_materials if "cement" in item.name.lower())
+    steel_tons = sum(item.quantity for item in detailed_materials if "steel" in item.name.lower() and item.unit == "tons")
+    sand_m3 = sum(item.quantity for item in detailed_materials if "sand" in item.name.lower() and item.unit in {"m³", "m3"})
+    brick_qty = sum(item.quantity for item in detailed_materials if "brick" in item.name.lower())
+    return {
+        "Cement": cement_qty,
+        "Steel": steel_tons * 1000,
+        "Sand": sand_m3 / 2.83 if sand_m3 > 0 else 0,
+        "Brick": brick_qty,
+    }
+
+
+def _build_optimized_schedule(floors: int) -> List[OptimizedScheduleStage]:
+    floor_factor = max(0, floors - 1)
+    return [
+        OptimizedScheduleStage(stage="Excavation", duration_days=3 + floor_factor, can_run_parallel=False),
+        OptimizedScheduleStage(stage="Foundation", duration_days=7 + floor_factor, can_run_parallel=False),
+        OptimizedScheduleStage(stage="Structure", duration_days=12 + (2 * floor_factor), can_run_parallel=False),
+        OptimizedScheduleStage(stage="MEP Rough-Ins", duration_days=8 + floor_factor, can_run_parallel=True, parallel_with="Brickwork"),
+        OptimizedScheduleStage(stage="Brickwork", duration_days=10 + floor_factor, can_run_parallel=True, parallel_with="MEP Rough-Ins"),
+        OptimizedScheduleStage(stage="Finishing", duration_days=15 + (2 * floor_factor), can_run_parallel=False),
     ]
+
+
+def _estimate_comparison(
+    cost_breakdown: CostBreakdown,
+    contractor_quote: Optional[ContractorQuoteInput],
+) -> ContractorComparison:
+    contractor_material = contractor_quote.material_cost if contractor_quote and contractor_quote.material_cost is not None else cost_breakdown.material_cost * 1.14
+    contractor_labour = contractor_quote.labour_cost if contractor_quote and contractor_quote.labour_cost is not None else cost_breakdown.labour_cost * 1.12
+    contractor_total = contractor_quote.total_cost if contractor_quote and contractor_quote.total_cost is not None else (contractor_material + contractor_labour + (cost_breakdown.gst_tax * 1.15))
+
+    rows = [
+        ComparisonRow(
+            category="Material",
+            contractor_cost=round(contractor_material, 2),
+            ai_estimate_cost=round(cost_breakdown.material_cost, 2),
+            savings=round(contractor_material - cost_breakdown.material_cost, 2),
+        ),
+        ComparisonRow(
+            category="Labour",
+            contractor_cost=round(contractor_labour, 2),
+            ai_estimate_cost=round(cost_breakdown.labour_cost, 2),
+            savings=round(contractor_labour - cost_breakdown.labour_cost, 2),
+        ),
+        ComparisonRow(
+            category="Total",
+            contractor_cost=round(contractor_total, 2),
+            ai_estimate_cost=round(cost_breakdown.total_estimate, 2),
+            savings=round(contractor_total - cost_breakdown.total_estimate, 2),
+        ),
+    ]
+    total_savings = round(contractor_total - cost_breakdown.total_estimate, 2)
+    savings_percent = round((total_savings / contractor_total) * 100, 2) if contractor_total > 0 else 0
+    return ContractorComparison(
+        rows=rows,
+        contractor_total=round(contractor_total, 2),
+        ai_total=round(cost_breakdown.total_estimate, 2),
+        total_savings=total_savings,
+        savings_percent=savings_percent,
+    )
+
+
+def _build_suggestions(
+    input_data: EstimateInput,
+    market_rates: List[MarketRateItem],
+    comparison: ContractorComparison,
+) -> List[str]:
+    suggestions = [
+        "Use weekly rate tracking before bulk procurement to lock better prices.",
+        "Keep a 5-7% contingency buffer for transport and minor wastage.",
+        "Bundle cement and steel purchase with one supplier to negotiate dispatch discounts.",
+    ]
+    if comparison.savings_percent >= 10:
+        suggestions.append("Current AI optimized estimate is in the 10–15% savings band versus common contractor markup.")
     if input_data.floors > 1:
-        suggestions.append("For multi-floor projects, lock shuttering and reinforcement vendors early.")
-    if input_data.material_price_variation_pct > 15:
-        suggestions.append("Material variation is high; compare 2-3 suppliers before final purchase orders.")
-    if duration_weeks > 24:
-        suggestions.append("Long schedules benefit from a phase-wise cash flow plan to avoid work stoppage.")
-    if cost_breakdown.total_estimate > 10_000_000:
-        suggestions.append("Consider milestone-based contractor payments linked to quality approvals.")
+        suggestions.append("For multi-floor projects, start electrical conduit planning before full masonry completion.")
+    if any(item.source_count < 2 for item in market_rates):
+        suggestions.append("Add more local supplier rates for low-source materials to improve pricing confidence.")
     return suggestions
 
 
-def _calculate_estimate(input_data: EstimateInput) -> EstimateResult:
+def _parse_rate_update_text(text: str) -> List[SupplierMaterialPrice]:
+    cleaned_lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not cleaned_lines:
+        return []
+    first_line = cleaned_lines[0].upper()
+    if "RATE UPDATE" not in first_line:
+        return []
+    prices: List[SupplierMaterialPrice] = []
+    for line in cleaned_lines[1:]:
+        line = line.replace(":", " ")
+        parts = [part for part in line.split() if part]
+        if len(parts) < 2:
+            continue
+        material_name = _normalize_material_name(parts[0])
+        numeric_text = re.sub(r"[^0-9.]", "", parts[1])
+        if not numeric_text:
+            continue
+        rate = float(numeric_text)
+        default_unit = DEFAULT_LOCAL_RATES.get(material_name, {"unit": "unit"})["unit"]
+        prices.append(SupplierMaterialPrice(material=material_name, rate=rate, unit=default_unit))
+    return prices
+
+
+async def _insert_market_source_entries(entries: List[MarketSourceEntryCreate]) -> List[MarketSourceEntry]:
+    created_entries: List[MarketSourceEntry] = []
+    for entry in entries:
+        normalized_material = _normalize_material_name(entry.material)
+        normalized_rate, normalized_unit = _convert_rate_to_base(normalized_material, entry.rate, entry.unit)
+        stored = MarketSourceEntry(
+            id=str(uuid.uuid4()),
+            source_type=entry.source_type,
+            supplier_name=entry.supplier_name,
+            location=entry.location,
+            material=entry.material,
+            rate=entry.rate,
+            unit=entry.unit,
+            normalized_material=normalized_material,
+            normalized_rate=round(normalized_rate, 4),
+            normalized_unit=str(normalized_unit),
+            source_reference=entry.source_reference,
+            collected_at=_now_iso(),
+        )
+        await db.market_rate_sources.insert_one(stored.model_dump())
+        created_entries.append(stored)
+    return created_entries
+
+
+async def _aggregate_market_rates(refresh_frequency: Literal["daily", "weekly"]) -> List[MarketRateItem]:
+    days = 1 if refresh_frequency == "daily" else 7
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    source_docs = await db.market_rate_sources.find({"collected_at": {"$gte": cutoff}}, {"_id": 0}).to_list(5000)
+    if not source_docs:
+        source_docs = await db.market_rate_sources.find({}, {"_id": 0}).to_list(5000)
+
+    grouped: Dict[str, List[dict]] = {material: [] for material in DEFAULT_LOCAL_RATES}
+    for doc in source_docs:
+        material = _normalize_material_name(doc.get("normalized_material", doc.get("material", "")))
+        if material not in grouped:
+            continue
+        grouped[material].append(doc)
+
+    items: List[MarketRateItem] = []
+    for material, docs in grouped.items():
+        if docs:
+            avg_rate = sum(item.get("normalized_rate", 0) for item in docs) / len(docs)
+            cheapest = min(docs, key=lambda item: item.get("normalized_rate", 10**9))
+            item = MarketRateItem(
+                material=material,
+                avg_local_rate=round(avg_rate, 2),
+                unit=docs[0].get("normalized_unit", DEFAULT_LOCAL_RATES[material]["unit"]),
+                source_count=len(docs),
+                cheapest_supplier=cheapest.get("supplier_name"),
+                cheapest_rate=round(cheapest.get("normalized_rate", avg_rate), 2),
+            )
+        else:
+            fallback = DEFAULT_LOCAL_RATES[material]
+            item = MarketRateItem(
+                material=material,
+                avg_local_rate=round(fallback["rate"], 2),
+                unit=fallback["unit"],
+                source_count=0,
+                cheapest_supplier="Default Nashik Baseline",
+                cheapest_rate=round(fallback["rate"], 2),
+            )
+        items.append(item)
+
+        date_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        await db.market_rate_history.update_one(
+            {"material": material, "date": date_key, "refresh_frequency": refresh_frequency},
+            {
+                "$set": {
+                    "avg_rate": item.avg_local_rate,
+                    "unit": item.unit,
+                    "updated_at": _now_iso(),
+                }
+            },
+            upsert=True,
+        )
+
+    await db.market_rate_snapshots.insert_one(
+        {
+            "id": str(uuid.uuid4()),
+            "refresh_frequency": refresh_frequency,
+            "last_updated": _now_iso(),
+            "items": [entry.model_dump() for entry in items],
+        }
+    )
+    return items
+
+
+async def _get_market_settings() -> MarketSettings:
+    settings_doc = await db.app_settings.find_one({"key": "market_rate_settings"}, {"_id": 0})
+    if not settings_doc:
+        return MarketSettings(refresh_frequency="weekly")
+    try:
+        return MarketSettings(refresh_frequency=settings_doc.get("refresh_frequency", "weekly"))
+    except ValidationError:
+        return MarketSettings(refresh_frequency="weekly")
+
+
+async def _set_market_settings(payload: MarketSettings) -> MarketSettings:
+    await db.app_settings.update_one(
+        {"key": "market_rate_settings"},
+        {"$set": {"key": "market_rate_settings", "refresh_frequency": payload.refresh_frequency, "updated_at": _now_iso()}},
+        upsert=True,
+    )
+    return payload
+
+
+def _build_primary_materials_snapshot(primary_quantities: Dict[str, float]) -> List[MaterialQuantity]:
+    return [
+        MaterialQuantity(name="Cement", quantity=round(primary_quantities["Cement"], 2), unit="bags"),
+        MaterialQuantity(name="Sand", quantity=round(primary_quantities["Sand"] * 2.83, 2), unit="m³"),
+        MaterialQuantity(name="Steel", quantity=round(primary_quantities["Steel"] / 1000, 3), unit="tons"),
+        MaterialQuantity(name="Bricks", quantity=round(primary_quantities["Brick"], 0), unit="nos"),
+    ]
+
+
+def _calculate_estimate(
+    input_data: EstimateInput,
+    market_rates: List[MarketRateItem],
+    supplier_recommendations: List[SupplierRecommendation],
+) -> EstimateResult:
     effective_area = input_data.built_up_area_sqft * input_data.floors
     base_rate = BASE_RATE_BY_TYPE[input_data.building_type]
     location_multiplier = _location_multiplier(input_data.location)
+    detailed_materials = _build_detailed_materials(effective_area, input_data.building_type)
+    primary_quantities = _extract_primary_material_quantities(detailed_materials)
 
-    base_cost = effective_area * base_rate * location_multiplier
-    material_cost = base_cost * 0.55 * (1 + (input_data.material_price_variation_pct / 100))
-    labour_cost = base_cost * 0.3 * (1 + (input_data.labour_cost_adjustment_pct / 100))
-    contractor_profit = (material_cost + labour_cost) * 0.08
-    sub_total = material_cost + labour_cost + contractor_profit
+    market_map = {item.material: item for item in market_rates}
+    cement_rate = market_map.get("Cement", MarketRateItem(material="Cement", avg_local_rate=DEFAULT_LOCAL_RATES["Cement"]["rate"], unit="bag", source_count=0)).avg_local_rate
+    steel_rate = market_map.get("Steel", MarketRateItem(material="Steel", avg_local_rate=DEFAULT_LOCAL_RATES["Steel"]["rate"], unit="kg", source_count=0)).avg_local_rate
+    sand_rate = market_map.get("Sand", MarketRateItem(material="Sand", avg_local_rate=DEFAULT_LOCAL_RATES["Sand"]["rate"], unit="brass", source_count=0)).avg_local_rate
+    brick_rate = market_map.get("Brick", MarketRateItem(material="Brick", avg_local_rate=DEFAULT_LOCAL_RATES["Brick"]["rate"], unit="nos", source_count=0)).avg_local_rate
+
+    local_material_cost = (
+        primary_quantities["Cement"] * cement_rate
+        + primary_quantities["Steel"] * steel_rate
+        + primary_quantities["Sand"] * sand_rate
+        + primary_quantities["Brick"] * brick_rate
+    )
+    base_structural_cost = effective_area * base_rate * location_multiplier
+    other_material_component = base_structural_cost * 0.14
+    optimized_material_cost = (local_material_cost + other_material_component) * (1 + (input_data.material_price_variation_pct / 100))
+    optimized_material_cost *= 0.91
+
+    labour_cost = (effective_area * 420 * location_multiplier) * (1 + (input_data.labour_cost_adjustment_pct / 100))
+    labour_cost *= 0.95
+    contractor_profit = (optimized_material_cost + labour_cost) * 0.05
+    sub_total = optimized_material_cost + labour_cost + contractor_profit
     gst_tax = sub_total * 0.05
     total_estimate = sub_total + gst_tax
 
-    type_factor = MATERIAL_FACTOR_BY_TYPE[input_data.building_type]
-    detailed_materials = _build_detailed_materials(effective_area, input_data.building_type)
-    materials = [
-        MaterialQuantity(name="Cement", quantity=round(effective_area * 0.43 * type_factor, 2), unit="bags"),
-        MaterialQuantity(name="Sand", quantity=round(effective_area * 0.028 * type_factor, 2), unit="m³"),
-        MaterialQuantity(name="Aggregate", quantity=round(effective_area * 0.024 * type_factor, 2), unit="m³"),
-        MaterialQuantity(name="Steel", quantity=round(effective_area * 0.0031 * type_factor, 3), unit="tons"),
-        MaterialQuantity(name="Bricks", quantity=round(effective_area * 8.4 * type_factor, 0), unit="nos"),
-        MaterialQuantity(name="Water", quantity=round(effective_area * 160 * type_factor, 0), unit="liters"),
-    ]
+    cost_breakdown = CostBreakdown(
+        material_cost=round(optimized_material_cost, 2),
+        labour_cost=round(labour_cost, 2),
+        contractor_profit=round(contractor_profit, 2),
+        gst_tax=round(gst_tax, 2),
+        total_estimate=round(total_estimate, 2),
+        cost_per_sqft=round(total_estimate / max(effective_area, 1), 2),
+    )
 
-    duration_weeks = max(10, min(52, int(6 + (input_data.floors * 4) + (effective_area / 450))))
+    duration_weeks = max(10, min(52, int(6 + (input_data.floors * 4) + (effective_area / 500))))
     phase_weeks = _allocate_phase_weeks(duration_weeks)
-
     schedule: List[SchedulePhase] = []
     current_week = 1
-    for idx, phase in enumerate(SCHEDULE_PHASES):
-        end_week = current_week + phase_weeks[idx] - 1
+    for index, phase in enumerate(SCHEDULE_PHASES):
+        end_week = current_week + phase_weeks[index] - 1
         schedule.append(
             SchedulePhase(
                 phase=phase["name"],
@@ -371,43 +736,114 @@ def _calculate_estimate(input_data: EstimateInput) -> EstimateResult:
         )
         current_week = end_week + 1
 
-    cost_breakdown = CostBreakdown(
-        material_cost=round(material_cost, 2),
-        labour_cost=round(labour_cost, 2),
-        contractor_profit=round(contractor_profit, 2),
-        gst_tax=round(gst_tax, 2),
-        total_estimate=round(total_estimate, 2),
-        cost_per_sqft=round(total_estimate / effective_area, 2),
-    )
-
-    suggestions = _build_suggestions(input_data, duration_weeks, cost_breakdown)
+    optimized_schedule = _build_optimized_schedule(input_data.floors)
+    comparison = _estimate_comparison(cost_breakdown, input_data.contractor_quote)
+    suggestions = _build_suggestions(input_data, market_rates, comparison)
 
     return EstimateResult(
         project_area_sqft=round(effective_area, 2),
         duration_weeks=duration_weeks,
         cost_breakdown=cost_breakdown,
-        materials=materials,
+        materials=_build_primary_materials_snapshot(primary_quantities),
         detailed_materials=detailed_materials,
         schedule=schedule,
+        optimized_schedule=optimized_schedule,
+        local_market_rates=market_rates,
+        recommended_suppliers=supplier_recommendations,
+        contractor_comparison=comparison,
+        estimated_savings_pct=comparison.savings_percent,
         tips=CONSTRUCTION_TIPS,
         suggestions=suggestions,
     )
 
 
-def _upgrade_saved_project_if_legacy(project_doc: dict) -> SavedProject:
+async def _build_supplier_recommendations() -> List[SupplierRecommendation]:
+    docs = await db.supplier_rates.find({}, {"_id": 0}).sort("updated_at", -1).to_list(500)
+    best_by_material: Dict[str, SupplierRecommendation] = {}
+    for doc in docs:
+        supplier_name = doc.get("supplier_name", "Supplier")
+        location = doc.get("location", "Nashik")
+        for price in doc.get("prices", []):
+            material = _normalize_material_name(price.get("material", ""))
+            if material not in DEFAULT_LOCAL_RATES:
+                continue
+            normalized_rate, normalized_unit = _convert_rate_to_base(material, float(price.get("rate", 0)), str(price.get("unit", "")))
+            candidate = SupplierRecommendation(
+                material=material,
+                supplier_name=supplier_name,
+                location=location,
+                rate=round(normalized_rate, 2),
+                unit=str(normalized_unit),
+            )
+            existing = best_by_material.get(material)
+            if not existing or candidate.rate < existing.rate:
+                best_by_material[material] = candidate
+    return [best_by_material[key] for key in sorted(best_by_material.keys())]
+
+
+async def _upgrade_saved_project_if_legacy(project_doc: dict) -> SavedProject:
     try:
         return SavedProject(**project_doc)
     except ValidationError:
-        input_data = EstimateInput(**project_doc["input_data"])
-        refreshed_result = _calculate_estimate(input_data)
+        input_data = EstimateInput(**project_doc.get("input_data", {}))
+        market_rates = await _aggregate_market_rates(input_data.refresh_frequency)
+        recommendations = await _build_supplier_recommendations()
+        refreshed_result = _calculate_estimate(input_data, market_rates, recommendations)
         upgraded_doc = {
             "id": project_doc.get("id", str(uuid.uuid4())),
             "project_name": project_doc.get("project_name", "Untitled Project"),
-            "created_at": project_doc.get("created_at", datetime.now(timezone.utc).isoformat()),
+            "created_at": project_doc.get("created_at", _now_iso()),
             "input_data": input_data.model_dump(),
             "result": refreshed_result.model_dump(),
         }
         return SavedProject(**upgraded_doc)
+
+
+def _extract_rate_from_text_window(window_text: str, material: str) -> Optional[float]:
+    candidates = re.findall(r"(?:₹|rs\.?|inr)?\s*([0-9]{2,6}(?:\.[0-9]+)?)", window_text, flags=re.IGNORECASE)
+    valid_ranges = {
+        "Cement": (200, 800),
+        "Steel": (35, 120),
+        "Sand": (1000, 8000),
+        "Brick": (3, 30),
+    }
+    low, high = valid_ranges[material]
+    for text in candidates:
+        value = float(text)
+        if low <= value <= high:
+            return value
+    return None
+
+
+def _scrape_url_for_rates(url: str, location: str) -> List[MarketSourceEntryCreate]:
+    entries: List[MarketSourceEntryCreate] = []
+    try:
+        response = requests.get(url, timeout=12)
+        if response.status_code != 200:
+            return entries
+        text = re.sub(r"<[^>]+>", " ", response.text.lower())
+        for alias, material in [("cement", "Cement"), ("steel", "Steel"), ("sand", "Sand"), ("brick", "Brick")]:
+            match = re.search(rf"{alias}.{{0,80}}", text)
+            if not match:
+                continue
+            window = match.group(0)
+            parsed_rate = _extract_rate_from_text_window(window, material)
+            if parsed_rate is None:
+                continue
+            entries.append(
+                MarketSourceEntryCreate(
+                    source_type="website",
+                    supplier_name="Website Listing",
+                    location=location,
+                    material=material,
+                    rate=parsed_rate,
+                    unit=DEFAULT_LOCAL_RATES[material]["unit"],
+                    source_reference=url,
+                )
+            )
+    except Exception:
+        return []
+    return entries
 
 
 @api_router.get("/")
@@ -415,23 +851,165 @@ async def root():
     return {"message": "AI Estimate Pro API is running"}
 
 
+@api_router.get("/market-rates/settings", response_model=MarketSettings)
+async def get_market_settings():
+    return await _get_market_settings()
+
+
+@api_router.post("/market-rates/settings", response_model=MarketSettings)
+async def update_market_settings(payload: MarketSettings):
+    return await _set_market_settings(payload)
+
+
+@api_router.get("/market-rates", response_model=MarketRatesResponse)
+async def get_market_rates(refresh_frequency: Optional[Literal["daily", "weekly"]] = Query(default=None)):
+    settings = await _get_market_settings()
+    frequency = refresh_frequency or settings.refresh_frequency
+    items = await _aggregate_market_rates(frequency)
+    return MarketRatesResponse(refresh_frequency=frequency, last_updated=_now_iso(), items=items)
+
+
+@api_router.post("/market-rates/sources", response_model=List[MarketSourceEntry])
+async def create_market_source_entries(payload: List[MarketSourceEntryCreate]):
+    return await _insert_market_source_entries(payload)
+
+
+@api_router.post("/market-rates/scrape", response_model=ScrapeResponse)
+async def scrape_market_rates(payload: ScrapeRequest):
+    all_entries: List[MarketSourceEntryCreate] = []
+    for url in payload.urls:
+        all_entries.extend(_scrape_url_for_rates(url, payload.location))
+    if all_entries:
+        await _insert_market_source_entries(all_entries)
+    return ScrapeResponse(processed_urls=len(payload.urls), created_entries=len(all_entries))
+
+
+@api_router.get("/market-rates/trends", response_model=MaterialTrendResponse)
+async def get_market_rate_trend(material: str = "Cement", days: int = 90):
+    normalized_material = _normalize_material_name(material)
+    points = await db.market_rate_history.find(
+        {"material": normalized_material},
+        {"_id": 0, "date": 1, "avg_rate": 1},
+    ).sort("date", 1).to_list(max(10, min(days, 180)))
+    return MaterialTrendResponse(
+        material=normalized_material,
+        unit=DEFAULT_LOCAL_RATES.get(normalized_material, {"unit": "unit"})["unit"],
+        points=[TrendPoint(date=item["date"], avg_rate=round(item["avg_rate"], 2)) for item in points],
+    )
+
+
+@api_router.post("/suppliers/rates", response_model=SupplierRateRecord)
+async def submit_supplier_rates(payload: SupplierRateSubmission):
+    record = SupplierRateRecord(
+        id=str(uuid.uuid4()),
+        supplier_name=payload.supplier_name,
+        location=payload.location,
+        prices=payload.prices,
+        source_type="supplier_manual",
+        updated_at=_now_iso(),
+    )
+    await db.supplier_rates.insert_one(record.model_dump())
+    source_entries = [
+        MarketSourceEntryCreate(
+            source_type="supplier_manual",
+            supplier_name=payload.supplier_name,
+            location=payload.location,
+            material=price.material,
+            rate=price.rate,
+            unit=price.unit,
+            source_reference="supplier-dashboard",
+        )
+        for price in payload.prices
+    ]
+    await _insert_market_source_entries(source_entries)
+    return record
+
+
+@api_router.get("/suppliers/rates", response_model=List[SupplierRateRecord])
+async def list_supplier_rates(limit: int = 50):
+    safe_limit = max(1, min(limit, 200))
+    records = await db.supplier_rates.find({}, {"_id": 0}).sort("updated_at", -1).limit(safe_limit).to_list(safe_limit)
+    return [SupplierRateRecord(**record) for record in records]
+
+
+@api_router.get("/whatsapp/status")
+async def get_whatsapp_status():
+    return {
+        "configured": bool(os.environ.get("WHATSAPP_VERIFY_TOKEN")),
+        "mode": "meta-cloud-api-webhook",
+        "recommended_for_free_start": "Meta WhatsApp Cloud API trial/free-start",
+    }
+
+
+@api_router.get("/whatsapp/webhook")
+async def verify_whatsapp_webhook(
+    hub_mode: Optional[str] = Query(default=None, alias="hub.mode"),
+    hub_verify_token: Optional[str] = Query(default=None, alias="hub.verify_token"),
+    hub_challenge: Optional[str] = Query(default=None, alias="hub.challenge"),
+):
+    verify_token = os.environ.get("WHATSAPP_VERIFY_TOKEN")
+    if not verify_token:
+        raise HTTPException(status_code=500, detail="WHATSAPP_VERIFY_TOKEN not configured")
+    if hub_mode == "subscribe" and hub_verify_token == verify_token:
+        return int(hub_challenge) if hub_challenge and hub_challenge.isdigit() else str(hub_challenge)
+    raise HTTPException(status_code=403, detail="Webhook verification failed")
+
+
+@api_router.post("/whatsapp/webhook")
+async def receive_whatsapp_webhook(payload: dict):
+    messages = []
+    for entry in payload.get("entry", []):
+        for change in entry.get("changes", []):
+            messages.extend(change.get("value", {}).get("messages", []))
+
+    created_count = 0
+    for message in messages:
+        if message.get("type") != "text":
+            continue
+        phone = message.get("from", "unknown")
+        text = message.get("text", {}).get("body", "")
+        prices = _parse_rate_update_text(text)
+        if not prices:
+            continue
+        supplier_submission = SupplierRateSubmission(
+            supplier_name=f"WA-{phone}",
+            location="Nashik",
+            prices=prices,
+        )
+        await submit_supplier_rates(supplier_submission)
+        await db.whatsapp_rate_updates.insert_one(
+            {
+                "id": str(uuid.uuid4()),
+                "phone": phone,
+                "raw_text": text,
+                "parsed_prices": [item.model_dump() for item in prices],
+                "created_at": _now_iso(),
+            }
+        )
+        created_count += 1
+    return {"status": "ok", "processed_updates": created_count}
+
+
 @api_router.post("/estimate", response_model=EstimateResult)
 async def calculate_estimate(input_data: EstimateInput):
-    return _calculate_estimate(input_data)
+    market_rates = await _aggregate_market_rates(input_data.refresh_frequency)
+    recommendations = await _build_supplier_recommendations()
+    return _calculate_estimate(input_data, market_rates, recommendations)
 
 
 @api_router.post("/projects", response_model=SavedProject)
 async def save_project(payload: SaveProjectRequest):
-    result = _calculate_estimate(payload.input_data)
+    market_rates = await _aggregate_market_rates(payload.input_data.refresh_frequency)
+    recommendations = await _build_supplier_recommendations()
+    result = _calculate_estimate(payload.input_data, market_rates, recommendations)
     project = SavedProject(
         id=str(uuid.uuid4()),
         project_name=payload.project_name,
-        created_at=datetime.now(timezone.utc).isoformat(),
+        created_at=_now_iso(),
         input_data=payload.input_data,
         result=result,
     )
-    project_doc = project.model_dump()
-    await db.saved_projects.insert_one(project_doc)
+    await db.saved_projects.insert_one(project.model_dump())
     return project
 
 
@@ -441,7 +1019,7 @@ async def list_projects(limit: int = 20):
     projects = await db.saved_projects.find({}, {"_id": 0}).sort("created_at", -1).limit(safe_limit).to_list(safe_limit)
     normalized: List[SavedProject] = []
     for project in projects:
-        normalized_project = _upgrade_saved_project_if_legacy(project)
+        normalized_project = await _upgrade_saved_project_if_legacy(project)
         normalized.append(normalized_project)
     return normalized
 
@@ -451,7 +1029,7 @@ async def get_project(project_id: str):
     project = await db.saved_projects.find_one({"id": project_id}, {"_id": 0})
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    return _upgrade_saved_project_if_legacy(project)
+    return await _upgrade_saved_project_if_legacy(project)
 
 
 @api_router.post("/chat/session", response_model=ChatSessionResponse)
@@ -477,33 +1055,18 @@ async def send_chat_message(payload: ChatMessageRequest):
         session_id=payload.session_id,
         role="user",
         text=payload.message,
-        created_at=datetime.now(timezone.utc).isoformat(),
+        created_at=_now_iso(),
     )
     await db.chat_messages.insert_one(user_record.model_dump())
 
-    recent_records = (
-        await db.chat_messages.find({"session_id": payload.session_id}, {"_id": 0})
-        .sort("created_at", -1)
-        .limit(12)
-        .to_list(12)
-    )
+    recent_records = await db.chat_messages.find({"session_id": payload.session_id}, {"_id": 0}).sort("created_at", -1).limit(12).to_list(12)
     recent_records.reverse()
-
     history_lines = [f"{item['role'].capitalize()}: {item['text']}" for item in recent_records]
     history_text = "\n".join(history_lines)
     context_block = payload.project_context or "No project context provided."
-    final_prompt = (
-        f"Project context:\n{context_block}\n\n"
-        f"Recent conversation:\n{history_text}\n\n"
-        f"Latest user message: {payload.message}"
-    )
+    final_prompt = f"Project context:\n{context_block}\n\nRecent conversation:\n{history_text}\n\nLatest user message: {payload.message}"
 
-    chat = LlmChat(
-        api_key=llm_key,
-        session_id=payload.session_id,
-        system_message=CHAT_SYSTEM_PROMPT,
-    ).with_model("openai", "gpt-5.2")
-
+    chat = LlmChat(api_key=llm_key, session_id=payload.session_id, system_message=CHAT_SYSTEM_PROMPT).with_model("openai", "gpt-5.2")
     try:
         reply_text = await chat.send_message(UserMessage(text=final_prompt))
     except Exception as error:
@@ -515,19 +1078,13 @@ async def send_chat_message(payload: ChatMessageRequest):
         session_id=payload.session_id,
         role="assistant",
         text=str(reply_text).strip(),
-        created_at=datetime.now(timezone.utc).isoformat(),
+        created_at=_now_iso(),
     )
     await db.chat_messages.insert_one(assistant_record.model_dump())
-
-    return ChatMessageResponse(
-        session_id=payload.session_id,
-        reply=assistant_record.text,
-        created_at=assistant_record.created_at,
-    )
+    return ChatMessageResponse(session_id=payload.session_id, reply=assistant_record.text, created_at=assistant_record.created_at)
 
 
 app.include_router(api_router)
-
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
@@ -536,10 +1093,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 

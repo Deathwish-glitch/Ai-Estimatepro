@@ -42,7 +42,7 @@ export default function MaterialsPage() {
     <div className="space-y-6 reveal-up" data-testid="materials-page">
       <div>
         <h1 className="text-4xl sm:text-5xl lg:text-6xl text-slate-900" data-testid="materials-page-heading">
-          Detailed Material Calculator
+          BOQ - Detailed Material Calculator
         </h1>
         <p className="text-sm text-slate-600 md:text-base" data-testid="materials-page-subheading">
           Approximate BOQ-style quantities across structural, masonry, finishing, MEP and openings.
