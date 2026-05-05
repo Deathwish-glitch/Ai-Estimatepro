@@ -419,6 +419,8 @@ class DrawingBoqItem(BaseModel):
     item: str
     quantity: float
     unit: str
+    confidence_score: float
+    confidence_level: Literal["high", "medium", "low"]
 
 
 class DrawingCostEstimate(BaseModel):
@@ -446,8 +448,43 @@ class DrawingScheduleStage(BaseModel):
     parallel_with: Optional[str] = None
 
 
+class DrawingCalibrationInfo(BaseModel):
+    reference_length_m: Optional[float] = None
+    applied: bool
+    scale_factor: float
+    note: str
+
+
+class DrawingAnalysisSummary(BaseModel):
+    analysis_id: str
+    project_name: str
+    file_name: str
+    generated_at: str
+    total_estimate: float
+    warning_count: int
+
+
+class DrawingBoqDelta(BaseModel):
+    item: str
+    base_quantity: float
+    target_quantity: float
+    delta_quantity: float
+    delta_percent: float
+
+
+class DrawingAnalysisComparisonResponse(BaseModel):
+    base_analysis_id: str
+    target_analysis_id: str
+    base_project_name: str
+    target_project_name: str
+    cost_delta: float
+    duration_delta_days: int
+    boq_deltas: List[DrawingBoqDelta]
+
+
 class DrawingAnalysisResponse(BaseModel):
     analysis_id: str
+    project_name: str
     file_name: str
     file_type: str
     quantity_mode: Literal["strict", "assisted", "hybrid"]
@@ -460,6 +497,7 @@ class DrawingAnalysisResponse(BaseModel):
     cost_estimate: DrawingCostEstimate
     warnings: List[DrawingWarning]
     assumptions: List[str]
+    calibration: DrawingCalibrationInfo
     optimized_schedule: List[DrawingScheduleStage]
     manual_vs_ai_quantities: List[DrawingManualComparisonRow]
     method_time_comparison: DrawingTimeComparison
@@ -971,6 +1009,97 @@ def _safe_float(value: object, default: float = 0.0) -> float:
         return default
 
 
+def _dimension_to_meter(value: float, unit: str) -> float:
+    normalized_unit = unit.strip().lower()
+    if normalized_unit in {"m", "meter", "meters"}:
+        return value
+    if normalized_unit in {"mm", "millimeter", "millimeters"}:
+        return value / 1000
+    if normalized_unit in {"cm", "centimeter", "centimeters"}:
+        return value / 100
+    if normalized_unit in {"ft", "feet", "foot"}:
+        return value * 0.3048
+    if normalized_unit in {"in", "inch", "inches"}:
+        return value * 0.0254
+    return value
+
+
+def _apply_calibration_to_metrics(
+    derived_metrics: dict,
+    dimensions: List[DrawingDimension],
+    calibration_reference_length_m: Optional[float],
+) -> DrawingCalibrationInfo:
+    if not calibration_reference_length_m or calibration_reference_length_m <= 0:
+        return DrawingCalibrationInfo(reference_length_m=None, applied=False, scale_factor=1.0, note="Calibration not provided.")
+
+    detected_lengths = [_dimension_to_meter(item.value, item.unit) for item in dimensions if item.value > 0]
+    if not detected_lengths:
+        return DrawingCalibrationInfo(
+            reference_length_m=round(calibration_reference_length_m, 3),
+            applied=False,
+            scale_factor=1.0,
+            note="Calibration skipped: no readable dimensions found in drawing.",
+        )
+
+    detected_reference_m = max(detected_lengths)
+    if detected_reference_m <= 0:
+        return DrawingCalibrationInfo(
+            reference_length_m=round(calibration_reference_length_m, 3),
+            applied=False,
+            scale_factor=1.0,
+            note="Calibration skipped: detected dimension was invalid.",
+        )
+
+    scale_factor = calibration_reference_length_m / detected_reference_m
+    if scale_factor < 0.3 or scale_factor > 3.0:
+        return DrawingCalibrationInfo(
+            reference_length_m=round(calibration_reference_length_m, 3),
+            applied=False,
+            scale_factor=round(scale_factor, 4),
+            note="Calibration skipped: scale factor out of safe range.",
+        )
+
+    area_keys = ["wall_area_m2", "plaster_area_m2", "flooring_area_m2"]
+    volume_keys = ["concrete_volume_m3", "brickwork_m3"]
+    count_keys = ["brick_quantity_no", "steel_quantity_ton"]
+
+    for key in area_keys:
+        derived_metrics[key] = _safe_float(derived_metrics.get(key)) * (scale_factor**2)
+    for key in volume_keys:
+        derived_metrics[key] = _safe_float(derived_metrics.get(key)) * (scale_factor**3)
+    for key in count_keys:
+        derived_metrics[key] = _safe_float(derived_metrics.get(key)) * (scale_factor**3)
+
+    return DrawingCalibrationInfo(
+        reference_length_m=round(calibration_reference_length_m, 3),
+        applied=True,
+        scale_factor=round(scale_factor, 4),
+        note="Calibration applied using provided reference length.",
+    )
+
+
+def _boq_confidence(item_name: str, has_dimensions: bool, quantity_mode: str, warnings: List[DrawingWarning]) -> tuple[float, Literal["high", "medium", "low"]]:
+    high_warnings = len([warn for warn in warnings if warn.severity == "high"])
+    structural_items = {"Wall Area", "Concrete", "Brickwork", "Brick Quantity", "Steel"}
+
+    score = 0.88 if has_dimensions else 0.64
+    if item_name in structural_items and quantity_mode in {"strict", "hybrid"} and not has_dimensions:
+        score -= 0.16
+    if item_name not in structural_items and quantity_mode in {"assisted", "hybrid"} and not has_dimensions:
+        score -= 0.08
+
+    score -= high_warnings * 0.05
+    score = max(0.35, min(score, 0.98))
+
+    if score >= 0.8:
+        level: Literal["high", "medium", "low"] = "high"
+    elif score >= 0.6:
+        level = "medium"
+    else:
+        level = "low"
+    return round(score, 2), level
+
+
 def _default_drawing_payload() -> dict:
     return {
         "detected_elements": {"walls": 12, "rooms": 5, "columns": 10, "doors": 8, "windows": 6, "staircases": 1, "slabs": 2},
@@ -1038,15 +1167,31 @@ async def _run_drawing_ai_analysis(image_path: str, mime_type: str, quantity_mod
     return _extract_json_from_text(str(response_text))
 
 
-def _build_drawing_boq(derived_metrics: dict) -> List[DrawingBoqItem]:
+def _build_drawing_boq(
+    derived_metrics: dict,
+    quantity_mode: Literal["strict", "assisted", "hybrid"],
+    warnings: List[DrawingWarning],
+    has_dimensions: bool,
+) -> List[DrawingBoqItem]:
+    def _item(item_name: str, metric_key: str, unit: str, digits: int = 2) -> DrawingBoqItem:
+        quantity_value = round(_safe_float(derived_metrics.get(metric_key)), digits)
+        confidence_score, confidence_level = _boq_confidence(item_name, has_dimensions, quantity_mode, warnings)
+        return DrawingBoqItem(
+            item=item_name,
+            quantity=quantity_value,
+            unit=unit,
+            confidence_score=confidence_score,
+            confidence_level=confidence_level,
+        )
+
     return [
-        DrawingBoqItem(item="Wall Area", quantity=round(_safe_float(derived_metrics.get("wall_area_m2")), 2), unit="m²"),
-        DrawingBoqItem(item="Concrete", quantity=round(_safe_float(derived_metrics.get("concrete_volume_m3")), 2), unit="m³"),
-        DrawingBoqItem(item="Brickwork", quantity=round(_safe_float(derived_metrics.get("brickwork_m3")), 2), unit="m³"),
-        DrawingBoqItem(item="Brick Quantity", quantity=round(_safe_float(derived_metrics.get("brick_quantity_no")), 0), unit="nos"),
-        DrawingBoqItem(item="Steel", quantity=round(_safe_float(derived_metrics.get("steel_quantity_ton")), 3), unit="tons"),
-        DrawingBoqItem(item="Plaster", quantity=round(_safe_float(derived_metrics.get("plaster_area_m2")), 2), unit="m²"),
-        DrawingBoqItem(item="Flooring", quantity=round(_safe_float(derived_metrics.get("flooring_area_m2")), 2), unit="m²"),
+        _item("Wall Area", "wall_area_m2", "m²"),
+        _item("Concrete", "concrete_volume_m3", "m³"),
+        _item("Brickwork", "brickwork_m3", "m³"),
+        _item("Brick Quantity", "brick_quantity_no", "nos", 0),
+        _item("Steel", "steel_quantity_ton", "tons", 3),
+        _item("Plaster", "plaster_area_m2", "m²"),
+        _item("Flooring", "flooring_area_m2", "m²"),
     ]
 
 
@@ -1176,6 +1321,56 @@ def _build_manual_vs_ai_comparison(
         ai_time_required="10 seconds",
     )
     return rows, time_comparison
+
+
+def _normalize_saved_drawing_analysis(doc: dict) -> DrawingAnalysisResponse:
+    payload = dict(doc)
+    payload.setdefault("project_name", "Untitled Drawing")
+    payload.setdefault(
+        "calibration",
+        {
+            "reference_length_m": None,
+            "applied": False,
+            "scale_factor": 1.0,
+            "note": "Calibration not available for legacy analysis.",
+        },
+    )
+
+    normalized_warnings = [DrawingWarning(**warning) for warning in payload.get("warnings", []) if isinstance(warning, dict)]
+    has_dimensions = bool(payload.get("dimensions"))
+    quantity_mode = payload.get("quantity_mode", "hybrid")
+
+    normalized_boq = []
+    for item in payload.get("boq_items", []):
+        if not isinstance(item, dict):
+            continue
+        if "confidence_score" in item and "confidence_level" in item:
+            normalized_boq.append(item)
+            continue
+        score, level = _boq_confidence(str(item.get("item", "Item")), has_dimensions, quantity_mode, normalized_warnings)
+        normalized_boq.append(
+            {
+                "item": item.get("item", "Item"),
+                "quantity": _safe_float(item.get("quantity")),
+                "unit": item.get("unit", "unit"),
+                "confidence_score": score,
+                "confidence_level": level,
+            }
+        )
+    payload["boq_items"] = normalized_boq
+
+    return DrawingAnalysisResponse(**payload)
+
+
+def _build_analysis_summary(analysis: DrawingAnalysisResponse) -> DrawingAnalysisSummary:
+    return DrawingAnalysisSummary(
+        analysis_id=analysis.analysis_id,
+        project_name=analysis.project_name,
+        file_name=analysis.file_name,
+        generated_at=analysis.generated_at,
+        total_estimate=round(analysis.cost_estimate.total_estimate, 2),
+        warning_count=len(analysis.warnings),
+    )
 
 
 @api_router.get("/")
@@ -1325,11 +1520,13 @@ async def receive_whatsapp_webhook(payload: dict):
 @api_router.post("/drawing-analyzer/analyze", response_model=DrawingAnalysisResponse)
 async def analyze_drawing(
     drawing_file: UploadFile = File(...),
+    project_name: str = Form("Untitled Drawing"),
     location: str = Form("Nashik"),
     building_type: Literal["Basic", "Standard", "Premium"] = Form("Standard"),
     floors: int = Form(1),
     refresh_frequency: Literal["daily", "weekly"] = Form("weekly"),
     quantity_mode: Literal["strict", "assisted", "hybrid"] = Form("hybrid"),
+    calibration_reference_length_m: Optional[float] = Form(None),
     manual_boq_json: Optional[str] = Form(None),
 ):
     file_name = drawing_file.filename or "uploaded-drawing"
@@ -1387,16 +1584,18 @@ async def analyze_drawing(
             derived_metrics["plaster_area_m2"] = _safe_float(derived_metrics.get("plaster_area_m2")) * floors
             derived_metrics["flooring_area_m2"] = _safe_float(derived_metrics.get("flooring_area_m2")) * floors
 
+        calibration_info = _apply_calibration_to_metrics(derived_metrics, dimensions, calibration_reference_length_m)
+
         market_rates = await _aggregate_market_rates(refresh_frequency)
-        boq_items = _build_drawing_boq(derived_metrics)
-        cost_estimate = _calculate_drawing_cost(derived_metrics, market_rates, location, building_type, floors)
-        optimized_schedule = _build_drawing_schedule(derived_metrics)
         warnings = _enrich_drawing_warnings(
             ai_payload.get("warnings", []),
             dimensions_raw,
             wall_thickness_mm,
             detected_elements_raw,
         )
+        boq_items = _build_drawing_boq(derived_metrics, quantity_mode, warnings, bool(dimensions))
+        cost_estimate = _calculate_drawing_cost(derived_metrics, market_rates, location, building_type, floors)
+        optimized_schedule = _build_drawing_schedule(derived_metrics)
 
         manual_boq = None
         if manual_boq_json:
@@ -1415,6 +1614,7 @@ async def analyze_drawing(
 
         analysis = DrawingAnalysisResponse(
             analysis_id=str(uuid.uuid4()),
+            project_name=project_name.strip() or "Untitled Drawing",
             file_name=file_name,
             file_type=extension,
             quantity_mode=quantity_mode,
@@ -1427,6 +1627,7 @@ async def analyze_drawing(
             cost_estimate=cost_estimate,
             warnings=warnings,
             assumptions=assumptions,
+            calibration=calibration_info,
             optimized_schedule=optimized_schedule,
             manual_vs_ai_quantities=comparison_rows,
             method_time_comparison=method_time,
@@ -1440,6 +1641,64 @@ async def analyze_drawing(
             os.remove(uploaded_temp_path)
         if image_path != uploaded_temp_path and os.path.exists(image_path):
             os.remove(image_path)
+
+
+@api_router.get("/drawing-analyzer/history", response_model=List[DrawingAnalysisSummary])
+async def list_drawing_analysis_history(limit: int = 20):
+    safe_limit = max(1, min(limit, 100))
+    records = await db.drawing_analyses.find({}, {"_id": 0}).sort("generated_at", -1).limit(safe_limit).to_list(safe_limit)
+    summaries: List[DrawingAnalysisSummary] = []
+    for record in records:
+        try:
+            analysis = _normalize_saved_drawing_analysis(record)
+            summaries.append(_build_analysis_summary(analysis))
+        except ValidationError:
+            continue
+    return summaries
+
+
+@api_router.get("/drawing-analyzer/compare", response_model=DrawingAnalysisComparisonResponse)
+async def compare_drawing_analyses(base_analysis_id: str, target_analysis_id: str):
+    base_record = await db.drawing_analyses.find_one({"analysis_id": base_analysis_id}, {"_id": 0})
+    target_record = await db.drawing_analyses.find_one({"analysis_id": target_analysis_id}, {"_id": 0})
+    if not base_record or not target_record:
+        raise HTTPException(status_code=404, detail="One or both analysis records not found")
+
+    base_analysis = _normalize_saved_drawing_analysis(base_record)
+    target_analysis = _normalize_saved_drawing_analysis(target_record)
+
+    base_boq_map = {item.item: item.quantity for item in base_analysis.boq_items}
+    target_boq_map = {item.item: item.quantity for item in target_analysis.boq_items}
+    all_items = sorted(set(base_boq_map.keys()) | set(target_boq_map.keys()))
+    boq_deltas: List[DrawingBoqDelta] = []
+
+    for item_name in all_items:
+        base_qty = _safe_float(base_boq_map.get(item_name))
+        target_qty = _safe_float(target_boq_map.get(item_name))
+        delta_qty = target_qty - base_qty
+        delta_percent = (delta_qty / base_qty * 100) if base_qty else 0
+        boq_deltas.append(
+            DrawingBoqDelta(
+                item=item_name,
+                base_quantity=round(base_qty, 3),
+                target_quantity=round(target_qty, 3),
+                delta_quantity=round(delta_qty, 3),
+                delta_percent=round(delta_percent, 2),
+            )
+        )
+
+    base_duration = sum(item.duration_days for item in base_analysis.optimized_schedule)
+    target_duration = sum(item.duration_days for item in target_analysis.optimized_schedule)
+
+    return DrawingAnalysisComparisonResponse(
+        base_analysis_id=base_analysis.analysis_id,
+        target_analysis_id=target_analysis.analysis_id,
+        base_project_name=base_analysis.project_name,
+        target_project_name=target_analysis.project_name,
+        cost_delta=round(target_analysis.cost_estimate.total_estimate - base_analysis.cost_estimate.total_estimate, 2),
+        duration_delta_days=target_duration - base_duration,
+        boq_deltas=boq_deltas,
+    )
 
 
 @api_router.post("/estimate", response_model=EstimateResult)

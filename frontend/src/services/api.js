@@ -32,3 +32,11 @@ export const analyzeDrawingApi = (formData) =>
   apiClient.post("/drawing-analyzer/analyze", formData, {
     headers: { "Content-Type": "multipart/form-data" },
   });
+
+export const getDrawingAnalysisHistoryApi = (limit = 20) =>
+  apiClient.get(`/drawing-analyzer/history?limit=${limit}`);
+
+export const compareDrawingAnalysesApi = (baseAnalysisId, targetAnalysisId) =>
+  apiClient.get(
+    `/drawing-analyzer/compare?base_analysis_id=${encodeURIComponent(baseAnalysisId)}&target_analysis_id=${encodeURIComponent(targetAnalysisId)}`,
+  );
