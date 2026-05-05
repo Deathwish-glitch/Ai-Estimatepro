@@ -64,6 +64,10 @@ Extend existing construction estimation app (do not rebuild) with local market i
   - Manual vs AI quantity comparison + time comparison table
   - Professional downloadable Drawing Analyzer report (PDF)
   - Market rates used table added in UI for transparency
+  - BOQ confidence scoring added (high/medium/low + score)
+  - Calibration step added (reference length input and scale application logic/fallback notes)
+  - Drawing analysis history endpoint + UI history table
+  - Version compare endpoint + UI (cost delta, duration delta, BOQ deltas)
 - QA fixes from testing:
   - stable BOQ page-level `data-testid` in both populated and empty states
   - removed chart mount warnings by switching to fixed-size chart rendering
@@ -87,3 +91,4 @@ Extend existing construction estimation app (do not rebuild) with local market i
 1. Introduce zone-based local rate filtering and confidence score per material.
 2. Add source quality controls (outlier removal + weighted average by recency/reliability).
 3. Add multi-page engineering PDF with embedded drawing snapshot and chart pages.
+4. Add persistent compare presets (A/B/C) and shareable comparison links.
