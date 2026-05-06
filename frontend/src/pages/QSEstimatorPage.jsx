@@ -279,14 +279,26 @@ export default function QSEstimatorPage() {
       listMaterialRatesApi(cityName),
       listLabourRatesApi(cityName),
     ]);
-    const materialRows =
-      materialResponse.data?.length
-        ? materialResponse.data
-        : defaultMaterialRates.map((item) => ({ ...item, id: crypto.randomUUID(), city: cityName }));
-    const labourRows =
-      labourResponse.data?.length
-        ? labourResponse.data
-        : defaultLabourRates.map((item) => ({ ...item, id: crypto.randomUUID(), city: cityName }));
+    // Merge backend rates with defaults — backend rates take precedence by name,
+    // but any default not present in backend is appended so new catalog entries appear.
+    const backendMaterials = materialResponse.data || [];
+    const materialNames = new Set(backendMaterials.map((m) => m.material_name));
+    const missingMaterials = defaultMaterialRates
+      .filter((m) => !materialNames.has(m.material_name))
+      .map((item) => ({ ...item, id: crypto.randomUUID(), city: cityName }));
+    const materialRows = backendMaterials.length
+      ? [...backendMaterials, ...missingMaterials]
+      : defaultMaterialRates.map((item) => ({ ...item, id: crypto.randomUUID(), city: cityName }));
+
+    const backendLabour = labourResponse.data || [];
+    const labourNames = new Set(backendLabour.map((l) => l.labour_type));
+    const missingLabour = defaultLabourRates
+      .filter((l) => !labourNames.has(l.labour_type))
+      .map((item) => ({ ...item, id: crypto.randomUUID(), city: cityName }));
+    const labourRows = backendLabour.length
+      ? [...backendLabour, ...missingLabour]
+      : defaultLabourRates.map((item) => ({ ...item, id: crypto.randomUUID(), city: cityName }));
+
     setMaterialRates(materialRows);
     setLabourRates(labourRows);
   }, [setLabourRates, setMaterialRates]);

@@ -210,3 +210,31 @@ Extend existing construction estimation app (do not rebuild) with local market i
 3. (Carry-over) Migrate sensitive items from localStorage to HttpOnly cookies / secure backend session.
 4. Make `BASIC_RATES` editable per-project (currently template defaults; wire to project state).
 5. Add weighted floor-wise distribution (ground/upper/terrace ratios) instead of even split.
+
+---
+
+## Latest Phase Update — Schedule Redesign + Better Rates + Weather UX + Export Hardening (Feb 2026)
+
+### User Direction Captured (4 issues reported)
+1. Weather forecast key not set — forecast not working.
+2. Export PDF/Excel not downloading in template format.
+3. Schedule UI looks bad — make it better and more visual.
+4. Better default rate data needed.
+
+### Newly Implemented
+- **Weather**: backend `/api/weather/forecast` now accepts an `api_key` query param so users can supply their own OpenWeatherMap key (no env change needed). Frontend Weather tab shows a password-style API key input (`qs-weather-api-key-input`) saved to `localStorage` (`ai_estimate_pro_owm_key`) and a help link to openweathermap.org/api. Without a key, graceful placeholder fallback message updated.
+- **Exports**: Both `createExcelExport` and `createPdfExport` now wrapped in try/catch with clear toast.error on failure and validation toast when `measurements.length === 0`. Successful export shows toast.success.
+- **Schedule tab redesign** (`qs-tab-schedule`) — full Gantt-style timeline:
+  - 4-card KPI strip (Total Duration / Weeks / Months / Phases).
+  - Project window: Start date → handover date with gradient progress bar.
+  - Phase Timeline (Gantt) with color-coded horizontal bars per phase (6-color palette), each bar showing duration + week range.
+  - Color-coded phase cards (one per phase) with start/end day/week.
+  - Collapsible "View as table" details for legacy table view.
+- **Better default rates** (Feb 2026 Indian market):
+  - Material rates expanded from 7 -> 22 entries (Cement OPC 53/PPC, TMT Steel Fe-500/Fe-550D, M-Sand, AAC Block, RMC M25/M30 etc.).
+  - Labour rates expanded from 5 -> 12 entries (Mason Skilled/Helper, Plumber, Electrician, Tile Mason, Site Supervisor etc.).
+  - `loadRates` now non-destructively merges backend rates with new defaults — backend rates win by name, missing defaults are appended.
+
+### Validation Status
+- Self-tested via Playwright smoke (7/7 pass): export validation toast, Schedule rendering with 5 Gantt bars + 5 phase cards, weather API key field + localStorage persistence, Excel + PDF download, merged rate database (23 material + 13 labour entries).
+- Backend curl: `/api/weather/forecast?api_key=XYZ` correctly accepts override; invalid key returns 401 with friendly fallback.
