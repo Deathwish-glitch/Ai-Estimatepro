@@ -238,3 +238,21 @@ Extend existing construction estimation app (do not rebuild) with local market i
 ### Validation Status
 - Self-tested via Playwright smoke (7/7 pass): export validation toast, Schedule rendering with 5 Gantt bars + 5 phase cards, weather API key field + localStorage persistence, Excel + PDF download, merged rate database (23 material + 13 labour entries).
 - Backend curl: `/api/weather/forecast?api_key=XYZ` correctly accepts override; invalid key returns 401 with friendly fallback.
+
+---
+
+## Latest Phase Update — Editable BASIC_RATES per Project (Feb 2026)
+
+### Newly Implemented
+- Basic Rates table in Abstract & BOQ Template tab is now **fully editable** per project. Each of the 14 rows has editable inputs for Description, Rate (Rs.), and Unit.
+- Edits are auto-persisted to `localStorage` keyed by project ID (`ai_estimate_pro_basic_rates_{project_id}`) — switching between projects loads each project's saved rates.
+- "Reset to template" button (`qs-basic-rates-reset-button`) restores all rows to the default template values.
+- Excel and PDF exports now use the project-specific edited rates instead of the global constant — every tender export reflects current project pricing.
+- Helpful hint shows "Saved per project (browser)" once project is created, "Save project to persist edits" before that.
+
+### Validation Status
+- Self-tested 4/5 scenarios passing on first run (5th was test scaffolding issue, not feature):
+  - Reset button visible ✅
+  - Edit persisted to localStorage ✅
+  - Edit persisted across page reload + project reselection ✅
+  - Reset button restores template default ✅

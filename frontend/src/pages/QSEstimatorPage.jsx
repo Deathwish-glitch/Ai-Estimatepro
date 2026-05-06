@@ -38,6 +38,32 @@ import {
 } from "@/utils/qsAbstractTemplate";
 import { formatINR, formatNumber } from "@/utils/formatters";
 
+const BASIC_RATES_STORAGE_PREFIX = "ai_estimate_pro_basic_rates_";
+
+const loadBasicRatesForProject = (projectId) => {
+  if (!projectId) return BASIC_RATES.map((row) => ({ ...row }));
+  try {
+    const raw = localStorage.getItem(`${BASIC_RATES_STORAGE_PREFIX}${projectId}`);
+    if (!raw) return BASIC_RATES.map((row) => ({ ...row }));
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length !== BASIC_RATES.length) {
+      return BASIC_RATES.map((row) => ({ ...row }));
+    }
+    return parsed;
+  } catch {
+    return BASIC_RATES.map((row) => ({ ...row }));
+  }
+};
+
+const saveBasicRatesForProject = (projectId, rates) => {
+  if (!projectId) return;
+  try {
+    localStorage.setItem(`${BASIC_RATES_STORAGE_PREFIX}${projectId}`, JSON.stringify(rates));
+  } catch {
+    // ignore storage errors
+  }
+};
+
 const categories = [
   "Earthwork",
   "Excavation",
@@ -181,6 +207,29 @@ export default function QSEstimatorPage() {
   });
   const [manualCategoryRows, setManualCategoryRows] = useState([]);
   const [activePreset, setActivePreset] = useState("");
+  const [basicRates, setBasicRates] = useState(() => BASIC_RATES.map((row) => ({ ...row })));
+
+  // Load basic rates whenever the project changes (per-project persistence).
+  useEffect(() => {
+    setBasicRates(loadBasicRatesForProject(project.id));
+  }, [project.id]);
+
+  const updateBasicRateField = (sr, field, value) => {
+    setBasicRates((prev) => {
+      const next = prev.map((row) =>
+        row.sr === sr ? { ...row, [field]: field === "rate" ? Number(value || 0) : value } : row,
+      );
+      saveBasicRatesForProject(project.id, next);
+      return next;
+    });
+  };
+
+  const resetBasicRatesToTemplate = () => {
+    const fresh = BASIC_RATES.map((row) => ({ ...row }));
+    setBasicRates(fresh);
+    saveBasicRatesForProject(project.id, fresh);
+    toast.success("Basic rates reset to template defaults.");
+  };
 
   const applyPreset = useCallback((presetKey) => {
     const preset = PROJECT_PRESETS[presetKey];
@@ -708,7 +757,8 @@ export default function QSEstimatorPage() {
     basic.addRow([]);
     const basicHeaderRow = basic.addRow(["Sl.No.", "Description of item", "Rs.", "Unit"]);
     setRowStyle(basicHeaderRow, headerFill, headerFont);
-    BASIC_RATES.forEach((row) => {
+    BASIC_RATES.forEach((_, i) => {
+      const row = basicRates[i] || BASIC_RATES[i];
       const r = basic.addRow([row.sr, row.description, row.rate, row.unit]);
       r.getCell(3).numFmt = "#,##0.00";
     });
@@ -938,7 +988,7 @@ export default function QSEstimatorPage() {
     autoTable(doc, {
       startY: 22,
       head: [["Sl.No.", "Description of item", "Rs.", "Unit"]],
-      body: BASIC_RATES.map((row) => [row.sr, row.description, formatINR(row.rate), row.unit]),
+      body: basicRates.map((row) => [row.sr, row.description, formatINR(row.rate), row.unit]),
       headStyles: { fillColor: [30, 41, 59], textColor: 255, fontStyle: "bold" },
       styles: { fontSize: 9, cellPadding: 3 },
     });
@@ -1342,7 +1392,17 @@ export default function QSEstimatorPage() {
             </section>
 
             <section data-testid="qs-basic-rates-section">
-              <p className="mb-2 text-sm font-semibold text-slate-700">BASIC RATES (WITHOUT GST) — for Tender Reference</p>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-semibold text-slate-700">BASIC RATES (WITHOUT GST) — Editable per Project</p>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-500" data-testid="qs-basic-rates-saved-hint">
+                    {project.id ? "Saved per project (browser)" : "Save project to persist edits"}
+                  </span>
+                  <Button variant="outline" size="sm" onClick={resetBasicRatesToTemplate} data-testid="qs-basic-rates-reset-button">
+                    Reset to template
+                  </Button>
+                </div>
+              </div>
               <Table data-testid="qs-basic-rates-table">
                 <TableHeader>
                   <TableRow>
@@ -1353,12 +1413,32 @@ export default function QSEstimatorPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {BASIC_RATES.map((row) => (
+                  {basicRates.map((row) => (
                     <TableRow key={row.sr} data-testid={`qs-basic-rate-row-${row.sr}`}>
                       <TableCell className="font-mono">{row.sr}</TableCell>
-                      <TableCell>{row.description}</TableCell>
-                      <TableCell className="font-mono text-right">{formatINR(row.rate)}</TableCell>
-                      <TableCell>{row.unit}</TableCell>
+                      <TableCell>
+                        <Input
+                          value={row.description}
+                          onChange={(e) => updateBasicRateField(row.sr, "description", e.target.value)}
+                          data-testid={`qs-basic-rate-description-${row.sr}`}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Input
+                          type="number"
+                          value={row.rate}
+                          onChange={(e) => updateBasicRateField(row.sr, "rate", e.target.value)}
+                          className="text-right font-mono"
+                          data-testid={`qs-basic-rate-rate-${row.sr}`}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Input
+                          value={row.unit}
+                          onChange={(e) => updateBasicRateField(row.sr, "unit", e.target.value)}
+                          data-testid={`qs-basic-rate-unit-${row.sr}`}
+                        />
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
