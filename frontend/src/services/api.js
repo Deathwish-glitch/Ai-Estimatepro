@@ -62,3 +62,5 @@ export const listLabourRatesApi = (city) => apiClient.get(`/qs/rates/labour${cit
 export const createQsExportLogApi = (payload) => apiClient.post("/qs/export-logs", payload);
 export const listQsExportLogsApi = (projectVersionId) =>
   apiClient.get(`/qs/export-logs${projectVersionId ? `?project_version_id=${encodeURIComponent(projectVersionId)}` : ""}`);
+
+export const getWeatherForecastApi = (city) => apiClient.get(`/weather/forecast?city=${encodeURIComponent(city)}`);

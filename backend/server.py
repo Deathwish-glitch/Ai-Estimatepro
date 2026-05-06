@@ -643,6 +643,24 @@ class QSExportLog(BaseModel):
     created_at: str
 
 
+class WeatherForecastDay(BaseModel):
+    date: str
+    min_temp_c: float
+    max_temp_c: float
+    avg_humidity: float
+    rainfall_mm: float
+    avg_wind_mps: float
+    description: str
+
+
+class WeatherForecastResponse(BaseModel):
+    city: str
+    has_api_key: bool
+    provider: str
+    message: str
+    forecast_days: List[WeatherForecastDay]
+
+
 class DrawingAnalysisResponse(BaseModel):
     analysis_id: str
     project_name: str
@@ -1593,6 +1611,80 @@ def _coerce_qs_boq_item(version_id: str, payload: QSBoqItemInput) -> QSBoqItem:
     )
 
 
+def _fetch_openweather_forecast(city: str) -> WeatherForecastResponse:
+    api_key = os.environ.get("OPENWEATHER_API_KEY", "").strip()
+    if not api_key:
+        return WeatherForecastResponse(
+            city=city,
+            has_api_key=False,
+            provider="openweathermap",
+            message="OPENWEATHER_API_KEY missing. Add key to enable live forecast.",
+            forecast_days=[],
+        )
+
+    geocode = requests.get(
+        "https://api.openweathermap.org/geo/1.0/direct",
+        params={"q": city, "limit": 1, "appid": api_key},
+        timeout=20,
+    )
+    geocode.raise_for_status()
+    geo_data = geocode.json()
+    if not geo_data:
+        return WeatherForecastResponse(
+            city=city,
+            has_api_key=True,
+            provider="openweathermap",
+            message="City not found in weather provider.",
+            forecast_days=[],
+        )
+
+    lat = geo_data[0]["lat"]
+    lon = geo_data[0]["lon"]
+    forecast_response = requests.get(
+        "https://api.openweathermap.org/data/2.5/forecast",
+        params={"lat": lat, "lon": lon, "units": "metric", "appid": api_key},
+        timeout=20,
+    )
+    forecast_response.raise_for_status()
+    forecast_data = forecast_response.json()
+
+    grouped: Dict[str, List[dict]] = {}
+    for item in forecast_data.get("list", []):
+        date_key = item.get("dt_txt", "")[:10]
+        if not date_key:
+            continue
+        grouped.setdefault(date_key, []).append(item)
+
+    days: List[WeatherForecastDay] = []
+    for date_key in sorted(grouped.keys())[:7]:
+        entries = grouped[date_key]
+        temps = [entry["main"]["temp"] for entry in entries]
+        humidity = [entry["main"]["humidity"] for entry in entries]
+        wind = [entry.get("wind", {}).get("speed", 0) for entry in entries]
+        rainfall = [entry.get("rain", {}).get("3h", 0) for entry in entries]
+        descriptions = [entry.get("weather", [{}])[0].get("description", "clear") for entry in entries]
+
+        days.append(
+            WeatherForecastDay(
+                date=date_key,
+                min_temp_c=round(min(temps), 2),
+                max_temp_c=round(max(temps), 2),
+                avg_humidity=round(sum(humidity) / max(len(humidity), 1), 2),
+                rainfall_mm=round(sum(rainfall), 2),
+                avg_wind_mps=round(sum(wind) / max(len(wind), 1), 2),
+                description=max(set(descriptions), key=descriptions.count),
+            )
+        )
+
+    return WeatherForecastResponse(
+        city=city,
+        has_api_key=True,
+        provider="openweathermap",
+        message="Live weather forecast fetched successfully.",
+        forecast_days=days,
+    )
+
+
 @api_router.get("/")
 async def root():
     return {"message": "AI Estimate Pro API is running"}
@@ -2072,6 +2164,21 @@ async def list_export_logs(project_version_id: Optional[str] = None):
     query = {"project_version_id": project_version_id} if project_version_id else {}
     docs = await db.qs_export_logs.find(query, {"_id": 0}).sort("created_at", -1).to_list(5000)
     return [QSExportLog(**doc) for doc in docs]
+
+
+@api_router.get("/weather/forecast", response_model=WeatherForecastResponse)
+async def get_weather_forecast(city: str = "Nashik"):
+    try:
+        return _fetch_openweather_forecast(city)
+    except Exception as error:
+        logger.exception("Weather forecast failed")
+        return WeatherForecastResponse(
+            city=city,
+            has_api_key=bool(os.environ.get("OPENWEATHER_API_KEY", "").strip()),
+            provider="openweathermap",
+            message=f"Weather service currently unavailable: {str(error)[:160]}",
+            forecast_days=[],
+        )
 
 
 @api_router.post("/estimate", response_model=EstimateResult)

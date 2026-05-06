@@ -26,7 +26,9 @@ import {
   upsertQsBoqApi,
   upsertQsMeasurementsApi,
 } from "@/services/api";
+import { weatherService } from "@/services/weatherService";
 import { useQsStore } from "@/store/qsStore";
+import { defaultAutoAssumptions, generateSemiAutomaticEstimate } from "@/utils/qsAutoGenerator";
 import { CATEGORY_FORMULAS, buildBoqFromMeasurements, calcTotals, calculateMeasurementRow } from "@/utils/qsFormulaEngine";
 import { formatINR, formatNumber } from "@/utils/formatters";
 
@@ -131,6 +133,12 @@ export default function QSEstimatorPage() {
   const [roughMode, setRoughMode] = useState("Standard");
   const [exportLogs, setExportLogs] = useState([]);
   const [loadingProject, setLoadingProject] = useState(false);
+  const [roomCounts, setRoomCounts] = useState({ bedrooms: 2, bathrooms: 2, kitchens: 1, living_rooms: 1 });
+  const [autoAssumptions, setAutoAssumptions] = useState(defaultAutoAssumptions);
+  const [scheduleRows, setScheduleRows] = useState([]);
+  const [weatherCity, setWeatherCity] = useState("Nashik");
+  const [weatherData, setWeatherData] = useState(null);
+  const [weatherLoading, setWeatherLoading] = useState(false);
 
   const totals = useMemo(() => calcTotals(measurements), [measurements]);
   const boqSummaryTotal = useMemo(
@@ -200,6 +208,7 @@ export default function QSEstimatorPage() {
       try {
         await loadProjectMeta();
         await loadRates(city);
+        await loadWeatherForecast("Nashik");
       } catch {
         toast.error("Unable to load QS dashboard defaults.");
       }
@@ -296,6 +305,54 @@ export default function QSEstimatorPage() {
     if (!files.length) return;
     const updated = [...drawingFiles, ...files.map((file) => `${file.name} (${file.type || "unknown"})`)];
     setDrawingFiles(updated);
+  };
+
+  const updateRoomCount = (field, value) => {
+    setRoomCounts((previous) => ({ ...previous, [field]: Number(value || 0) }));
+  };
+
+  const updateAutoAssumption = (key, value) => {
+    setAutoAssumptions((previous) => ({ ...previous, [key]: Number(value || 0) }));
+  };
+
+  const onAutoGenerateFromBasicInputs = () => {
+    const builtUpArea = Number(project.built_up_area || 0);
+    if (builtUpArea <= 0) {
+      toast.error("Enter valid built-up area before auto generation.");
+      return;
+    }
+
+    const generated = generateSemiAutomaticEstimate({
+      builtUpAreaSqft: builtUpArea,
+      floors: Number(project.floors || 1),
+      qualityLevel: project.rate_profile || "Standard",
+      roomCounts,
+      assumptions: autoAssumptions,
+    });
+
+    setMeasurements(generated.generatedRows);
+    setBoqItems(buildBoqFromMeasurements(generated.generatedRows));
+    setScheduleRows(generated.scheduleDays);
+    setActiveTab("measurement");
+    toast.success("Semi-automatic measurement sheets generated.");
+  };
+
+  const loadWeatherForecast = async (cityName = weatherCity) => {
+    setWeatherLoading(true);
+    try {
+      const formatted = await weatherService.getDailyForecast(cityName);
+      setWeatherData(formatted);
+    } catch {
+      setWeatherData({
+        city: cityName,
+        hasApiKey: false,
+        provider: "openweathermap",
+        message: "Weather service unavailable right now.",
+        days: [],
+      });
+    } finally {
+      setWeatherLoading(false);
+    }
   };
 
   const updateMeasurementCell = (rowId, field, value) => {
@@ -406,10 +463,20 @@ export default function QSEstimatorPage() {
     workbook.creator = "AI Estimate Pro";
     workbook.created = new Date();
 
-    const summary = workbook.addWorksheet("Summary", { views: [{ state: "frozen", ySplit: 2 }] });
-    summary.mergeCells("A1:E1");
-    summary.getCell("A1").value = "Professional Civil Estimation Summary";
-    summary.getCell("A1").font = { bold: true, size: 14 };
+    const applySheetHeader = (sheet, title) => {
+      sheet.mergeCells("A1:H1");
+      sheet.getCell("A1").value = title;
+      sheet.getCell("A1").font = { bold: true, size: 13 };
+      sheet.getCell("A1").alignment = { horizontal: "center" };
+      sheet.getCell("A1").fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FFF1F5F9" },
+      };
+    };
+
+    const summary = workbook.addWorksheet("ABSTRACT SUMMARY", { views: [{ state: "frozen", ySplit: 2 }] });
+    applySheetHeader(summary, "Professional Civil Estimation Summary");
     summary.addRow(["Project Name", project.project_name]);
     summary.addRow(["Client", project.client_name]);
     summary.addRow(["Location", project.location]);
@@ -418,7 +485,8 @@ export default function QSEstimatorPage() {
     summary.addRow(["Measurement Total", totals.totalAmount]);
     summary.addRow(["BOQ Total", boqSummaryTotal]);
 
-    const boqSheet = workbook.addWorksheet("BOQ", { views: [{ state: "frozen", ySplit: 1 }] });
+    const boqSheet = workbook.addWorksheet("BOQ MASTER", { views: [{ state: "frozen", ySplit: 2 }] });
+    applySheetHeader(boqSheet, "Bill of Quantities");
     boqSheet.columns = [
       { header: "Sr No", key: "sr_no", width: 10 },
       { header: "Section", key: "section", width: 22 },
@@ -429,9 +497,10 @@ export default function QSEstimatorPage() {
       { header: "Amount", key: "total", width: 16 },
     ];
     boqItems.forEach((item) => boqSheet.addRow(item));
-    boqSheet.addRow({ description: "Grand Total", total: { formula: `SUM(G2:G${boqItems.length + 1})` } });
+    boqSheet.addRow({ description: "Grand Total", total: { formula: `SUM(G3:G${boqItems.length + 2})` } });
 
-    const measurementSheet = workbook.addWorksheet("Detailed Measurement", { views: [{ state: "frozen", ySplit: 1 }] });
+    const measurementSheet = workbook.addWorksheet("MEASUREMENT SHEET", { views: [{ state: "frozen", ySplit: 2 }] });
+    applySheetHeader(measurementSheet, "Detailed Measurement Sheet");
     measurementSheet.columns = [
       { header: "Category", key: "category", width: 18 },
       { header: "Description", key: "description", width: 24 },
@@ -449,40 +518,53 @@ export default function QSEstimatorPage() {
     ];
     measurements.forEach((item) => measurementSheet.addRow(item));
 
-    const rccSheet = workbook.addWorksheet("RCC Quantities");
+    const rccSheet = workbook.addWorksheet("RCC QUANTITY");
+    applySheetHeader(rccSheet, "RCC Quantity Statement");
     rccSheet.addRow(["Description", "Quantity", "Unit"]);
     measurements
       .filter((item) => ["RCC", "Columns", "Beams", "Slabs"].includes(item.category))
       .forEach((item) => rccSheet.addRow([item.description, item.quantity, item.unit]));
 
-    const steelSheet = workbook.addWorksheet("Steel BBS");
+    const steelSheet = workbook.addWorksheet("STEEL BBS");
+    applySheetHeader(steelSheet, "Steel Bending Schedule");
     steelSheet.addRow(["Description", "Diameter", "Length", "Qty", "Unit"]);
     measurements
       .filter((item) => item.category === "Steel/BBS")
       .forEach((item) => steelSheet.addRow([item.description, item.diameter, item.length, item.quantity, item.unit]));
 
-    const paintSheet = workbook.addWorksheet("Paint Calculations");
+    const paintSheet = workbook.addWorksheet("PAINT CALC");
+    applySheetHeader(paintSheet, "Paint and Surface Calculations");
     paintSheet.addRow(["Description", "Area", "Rate", "Amount"]);
     measurements
       .filter((item) => ["Paint", "Plaster"].includes(item.category))
       .forEach((item) => paintSheet.addRow([item.description, item.quantity, item.rate, item.amount]));
 
-    const rateSheet = workbook.addWorksheet("Rate Analysis");
+    const rateSheet = workbook.addWorksheet("RATE ANALYSIS");
+    applySheetHeader(rateSheet, "Material and Labour Rate Analysis");
     rateSheet.addRow(["Material", "City", "Unit", "Rate"]);
     materialRates.forEach((item) => rateSheet.addRow([item.material_name, city, item.unit, item.rate]));
     rateSheet.addRow([]);
     rateSheet.addRow(["Labour Type", "City", "Unit", "Rate"]);
     labourRates.forEach((item) => rateSheet.addRow([item.labour_type, city, item.unit, item.rate]));
 
-    const materialSummary = workbook.addWorksheet("Material Summary");
+    const materialSummary = workbook.addWorksheet("MATERIAL SUMMARY");
+    applySheetHeader(materialSummary, "Material Quantity and Cost Summary");
     materialSummary.addRow(["Description", "Quantity", "Amount"]);
     measurements.forEach((item) => materialSummary.addRow([item.description, item.quantity, item.amount]));
 
-    const abstractCost = workbook.addWorksheet("Abstract Cost");
+    const abstractCost = workbook.addWorksheet("ABSTRACT COST");
+    applySheetHeader(abstractCost, "Abstract Cost Statement");
     abstractCost.addRow(["Head", "Amount"]);
     abstractCost.addRow(["Measurement Total", totals.totalAmount]);
     abstractCost.addRow(["BOQ Total", boqSummaryTotal]);
     abstractCost.addRow(["Rough Estimate", roughEstimate.total]);
+
+    const scheduleSheet = workbook.addWorksheet("EXECUTION SCHEDULE");
+    applySheetHeader(scheduleSheet, "Auto Generated Construction Schedule");
+    scheduleSheet.addRow(["Phase", "Days", "Weeks"]);
+    scheduleRows.forEach((phase) => {
+      scheduleSheet.addRow([phase.phase, phase.days, Number((phase.days / 7).toFixed(1))]);
+    });
 
     const buffer = await workbook.xlsx.writeBuffer();
     saveAs(new Blob([buffer]), `${project.project_name || "qs-project"}-estimate.xlsx`);
@@ -521,6 +603,12 @@ export default function QSEstimatorPage() {
       startY: doc.lastAutoTable.finalY + 8,
       head: [["Sr", "Section", "Description", "Qty", "Unit", "Rate", "Total"]],
       body: boqItems.map((item, index) => [index + 1, item.section, item.description, item.qty, item.unit, formatINR(item.rate), formatINR(item.total)]),
+    });
+
+    autoTable(doc, {
+      startY: doc.lastAutoTable.finalY + 8,
+      head: [["Phase", "Days", "Weeks"]],
+      body: scheduleRows.map((row) => [row.phase, String(row.days), (row.days / 7).toFixed(1)]),
     });
 
     doc.text(`Total Measurement Amount: ${formatINR(totals.totalAmount)}`, 14, doc.lastAutoTable.finalY + 12);
@@ -573,7 +661,17 @@ export default function QSEstimatorPage() {
             <Input type="number" value={project.built_up_area} onChange={(e) => updateProjectField("built_up_area", e.target.value)} placeholder="Built-up area" data-testid="qs-built-up-area-input" />
             <Input type="number" value={project.floors} onChange={(e) => updateProjectField("floors", e.target.value)} placeholder="Number of floors" data-testid="qs-floors-input" />
             <Input value={project.construction_type} onChange={(e) => updateProjectField("construction_type", e.target.value)} placeholder="Construction type" data-testid="qs-construction-type-input" />
-            <Input value={project.rate_profile} onChange={(e) => updateProjectField("rate_profile", e.target.value)} placeholder="Rate profile" data-testid="qs-rate-profile-input" />
+            <Select value={project.rate_profile || "Standard"} onValueChange={(value) => updateProjectField("rate_profile", value)}>
+              <SelectTrigger data-testid="qs-quality-level-select">
+                <SelectValue placeholder="Quality level" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="Basic">Basic</SelectItem>
+                <SelectItem value="Standard">Standard</SelectItem>
+                <SelectItem value="Premium">Premium</SelectItem>
+                <SelectItem value="Luxury">Luxury</SelectItem>
+              </SelectContent>
+            </Select>
             <Input type="file" multiple onChange={onDrawingUpload} data-testid="qs-drawing-upload-input" />
             <Select value={project.id || ""} onValueChange={onSelectProject}>
               <SelectTrigger data-testid="qs-existing-project-select">
@@ -590,6 +688,7 @@ export default function QSEstimatorPage() {
           <div className="flex flex-wrap gap-2" data-testid="qs-project-actions">
             <Button onClick={onCreateProject} disabled={loadingProject} data-testid="qs-create-project-button"><Save size={16} /> {loadingProject ? "Saving..." : "Create Project"}</Button>
             <Button variant="secondary" onClick={onCreateRevision} data-testid="qs-create-revision-button"><Plus size={16} /> New Revision</Button>
+            <Button variant="default" onClick={onAutoGenerateFromBasicInputs} data-testid="qs-auto-generate-button">Auto Generate Estimate</Button>
             <Select value={activeVersionId} onValueChange={onVersionChange}>
               <SelectTrigger className="w-[220px]" data-testid="qs-version-select-trigger">
                 <SelectValue placeholder="Select revision" />
@@ -619,6 +718,28 @@ export default function QSEstimatorPage() {
                 {!versions.length ? <li>No revisions yet.</li> : null}
               </ul>
             </div>
+
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3" data-testid="qs-room-count-panel">
+              <p className="mb-2 text-sm font-medium text-slate-700">Optional Room Counts (auto generation)</p>
+              <div className="grid grid-cols-2 gap-2">
+                <Input type="number" value={roomCounts.bedrooms} onChange={(e) => updateRoomCount("bedrooms", e.target.value)} placeholder="Bedrooms" data-testid="qs-room-bedrooms-input" />
+                <Input type="number" value={roomCounts.bathrooms} onChange={(e) => updateRoomCount("bathrooms", e.target.value)} placeholder="Bathrooms" data-testid="qs-room-bathrooms-input" />
+                <Input type="number" value={roomCounts.kitchens} onChange={(e) => updateRoomCount("kitchens", e.target.value)} placeholder="Kitchens" data-testid="qs-room-kitchens-input" />
+                <Input type="number" value={roomCounts.living_rooms} onChange={(e) => updateRoomCount("living_rooms", e.target.value)} placeholder="Living rooms" data-testid="qs-room-living-input" />
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3" data-testid="qs-assumptions-panel">
+              <p className="mb-2 text-sm font-medium text-slate-700">Engineering Assumptions (editable)</p>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {Object.entries(autoAssumptions).map(([key, value]) => (
+                  <div key={key}>
+                    <label className="text-xs text-slate-500">{key}</label>
+                    <Input type="number" value={value} onChange={(e) => updateAutoAssumption(key, e.target.value)} data-testid={`qs-assumption-${key}`} />
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -626,8 +747,10 @@ export default function QSEstimatorPage() {
       <div className="flex flex-wrap gap-2" data-testid="qs-tab-navigation">
         {tabButton("measurement", "Measurement Sheets")}
         {tabButton("boq", "BOQ Generator")}
+        {tabButton("schedule", "Schedule")}
         {tabButton("rates", "Rate Database")}
         {tabButton("rough", "Rough Estimate")}
+        {tabButton("weather", "India Weather")}
         {tabButton("exports", "Exports")}
       </div>
 
@@ -838,6 +961,89 @@ export default function QSEstimatorPage() {
               <p className="text-sm text-slate-600">Rough total estimate</p>
               <p className="font-mono text-xl text-slate-900">{formatINR(roughEstimate.total)}</p>
             </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {activeTab === "schedule" ? (
+        <Card className="border-slate-200 bg-white shadow-sm" data-testid="qs-schedule-card">
+          <CardHeader>
+            <CardTitle className="text-2xl">Auto Construction Schedule (Day + Week Views)</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {!scheduleRows.length ? (
+              <p className="text-sm text-slate-600" data-testid="qs-schedule-empty-text">
+                Run <strong>Auto Generate Estimate</strong> to produce schedule from project inputs.
+              </p>
+            ) : null}
+            <Table data-testid="qs-schedule-table">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Phase</TableHead>
+                  <TableHead>Days</TableHead>
+                  <TableHead>Weeks (approx)</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {scheduleRows.map((row, index) => (
+                  <TableRow key={`${row.phase}-${index}`} data-testid={`qs-schedule-row-${index}`}>
+                    <TableCell>{row.phase}</TableCell>
+                    <TableCell className="font-mono">{row.days}</TableCell>
+                    <TableCell className="font-mono">{(row.days / 7).toFixed(1)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {activeTab === "weather" ? (
+        <Card className="border-slate-200 bg-white shadow-sm" data-testid="qs-weather-card">
+          <CardHeader>
+            <CardTitle className="text-2xl">Indian Weather Forecast (OpenWeather)</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex flex-wrap gap-2" data-testid="qs-weather-actions">
+              <Input value={weatherCity} onChange={(e) => setWeatherCity(e.target.value)} className="w-[260px]" data-testid="qs-weather-city-input" placeholder="City (India)" />
+              <Button onClick={() => loadWeatherForecast(weatherCity)} data-testid="qs-weather-fetch-button">Fetch Forecast</Button>
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3" data-testid="qs-weather-status-panel">
+              <p className="text-sm text-slate-700" data-testid="qs-weather-status-text">
+                {weatherLoading ? "Loading weather forecast..." : weatherData?.message || "Weather forecast ready."}
+              </p>
+              {!weatherData?.hasApiKey ? (
+                <p className="mt-1 text-xs text-amber-700" data-testid="qs-weather-missing-key-text">
+                  Missing API key. Add <code>OPENWEATHER_API_KEY</code> in backend .env to enable live data.
+                </p>
+              ) : null}
+            </div>
+
+            <Table data-testid="qs-weather-forecast-table">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Temp (Min/Max)</TableHead>
+                  <TableHead>Rainfall</TableHead>
+                  <TableHead>Humidity</TableHead>
+                  <TableHead>Wind</TableHead>
+                  <TableHead>Condition</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(weatherData?.days || []).map((day) => (
+                  <TableRow key={day.date} data-testid={`qs-weather-day-${day.date}`}>
+                    <TableCell>{day.date}</TableCell>
+                    <TableCell className="font-mono">{day.minTempC}°C / {day.maxTempC}°C</TableCell>
+                    <TableCell className="font-mono">{day.rainfallMm} mm</TableCell>
+                    <TableCell className="font-mono">{day.avgHumidity}%</TableCell>
+                    <TableCell className="font-mono">{day.avgWindMps} m/s</TableCell>
+                    <TableCell>{day.description}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           </CardContent>
         </Card>
       ) : null}
