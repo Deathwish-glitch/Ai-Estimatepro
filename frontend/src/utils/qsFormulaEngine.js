@@ -39,41 +39,44 @@ const mathScope = {
   round: Math.round,
 };
 
-const formulaParser = new Parser({
-  operators: {
-    add: true,
-    concatenate: false,
-    conditional: false,
-    divide: true,
-    factorial: false,
-    logical: false,
-    multiply: true,
-    power: true,
-    remainder: true,
-    subtract: true,
-    comparison: false,
-    "in": false,
-    assignment: false,
-  },
-});
+const formulaParser = new Parser();
 
-const allowedVariables = new Set(["length", "width", "height", "depth", "diameter"]);
+const variableAliasMap = {
+  length: "L",
+  width: "W",
+  height: "H",
+  depth: "D",
+  diameter: "DIA",
+};
+
+const allowedVariables = new Set(["L", "W", "H", "D", "DIA"]);
+const allowedFormulaPattern = /^[a-zA-Z0-9_+\-*/().,\s^]*$/;
+
+const normalizeFormulaVariables = (formulaText) => {
+  let normalized = formulaText;
+  Object.entries(variableAliasMap).forEach(([fromVar, toVar]) => {
+    normalized = normalized.replace(new RegExp(`\\b${fromVar}\\b`, "g"), toVar);
+  });
+  return normalized;
+};
 
 export const evaluateFormula = (formula, dimensions) => {
   const safeFormula = String(formula || "").trim();
   if (!safeFormula) return 0;
+  if (!allowedFormulaPattern.test(safeFormula)) return 0;
+  const normalizedFormula = normalizeFormulaVariables(safeFormula);
 
   const scope = {
-    length: toNumber(dimensions.length),
-    width: toNumber(dimensions.width),
-    height: toNumber(dimensions.height),
-    depth: toNumber(dimensions.depth),
-    diameter: toNumber(dimensions.diameter),
+    L: toNumber(dimensions.length),
+    W: toNumber(dimensions.width),
+    H: toNumber(dimensions.height),
+    D: toNumber(dimensions.depth),
+    DIA: toNumber(dimensions.diameter),
     ...mathScope,
   };
 
   try {
-    const expression = formulaParser.parse(safeFormula);
+    const expression = formulaParser.parse(normalizedFormula);
     const expressionVariables = expression.variables();
     const hasInvalidVariable = expressionVariables.some((variableName) => !allowedVariables.has(variableName));
     if (hasInvalidVariable) return 0;
