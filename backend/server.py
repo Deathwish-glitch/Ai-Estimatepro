@@ -482,6 +482,167 @@ class DrawingAnalysisComparisonResponse(BaseModel):
     boq_deltas: List[DrawingBoqDelta]
 
 
+class QSProjectCreate(BaseModel):
+    project_name: str = Field(min_length=2, max_length=120)
+    client_name: str = Field(min_length=2, max_length=120)
+    location: str = Field(min_length=2, max_length=120)
+    built_up_area: float = Field(gt=0)
+    floors: int = Field(ge=1, le=20)
+    construction_type: str = Field(default="RCC Frame", max_length=120)
+    rate_profile: str = Field(default="Standard", max_length=80)
+
+
+class QSProject(BaseModel):
+    id: str
+    project_name: str
+    client_name: str
+    location: str
+    built_up_area: float
+    floors: int
+    construction_type: str
+    rate_profile: str
+    created_at: str
+
+
+class QSProjectVersionCreate(BaseModel):
+    version_name: str = Field(min_length=2, max_length=80)
+    revision_notes: str = Field(default="", max_length=500)
+    drawing_files: List[str] = Field(default_factory=list)
+
+
+class QSProjectVersion(BaseModel):
+    id: str
+    project_id: str
+    version_name: str
+    revision_notes: str
+    drawing_files: List[str]
+    created_at: str
+
+
+class QSMeasurementItem(BaseModel):
+    id: str
+    project_version_id: str
+    category: str
+    description: str
+    length: float = 0
+    width: float = 0
+    height: float = 0
+    depth: float = 0
+    diameter: float = 0
+    quantity: float = 0
+    quantity_override: bool = False
+    unit: str = "m3"
+    formula: str = "length*width*height"
+    additions: float = 0
+    deductions: float = 0
+    wastage_percent: float = 0
+    rate: float = 0
+    amount: float = 0
+    note: str = ""
+    created_at: str
+    updated_at: str
+
+
+class QSMeasurementItemInput(BaseModel):
+    id: Optional[str] = None
+    category: str
+    description: str
+    length: float = 0
+    width: float = 0
+    height: float = 0
+    depth: float = 0
+    diameter: float = 0
+    quantity: float = 0
+    quantity_override: bool = False
+    unit: str = "m3"
+    formula: str = "length*width*height"
+    additions: float = 0
+    deductions: float = 0
+    wastage_percent: float = 0
+    rate: float = 0
+    amount: float = 0
+    note: str = ""
+
+
+class QSMeasurementBatchUpsert(BaseModel):
+    items: List[QSMeasurementItemInput]
+
+
+class QSBoqItem(BaseModel):
+    id: str
+    project_version_id: str
+    section: str
+    description: str
+    qty: float
+    unit: str
+    rate: float
+    total: float
+    sr_no: int
+    created_at: str
+    updated_at: str
+
+
+class QSBoqItemInput(BaseModel):
+    id: Optional[str] = None
+    section: str
+    description: str
+    qty: float
+    unit: str
+    rate: float
+    total: float
+    sr_no: int
+
+
+class QSBoqBatchUpsert(BaseModel):
+    items: List[QSBoqItemInput]
+
+
+class QSMaterialRate(BaseModel):
+    id: str
+    material_name: str
+    city: str
+    unit: str
+    rate: float
+    updated_at: str
+
+
+class QSMaterialRateInput(BaseModel):
+    id: Optional[str] = None
+    material_name: str
+    city: str
+    unit: str
+    rate: float
+
+
+class QSLabourRate(BaseModel):
+    id: str
+    labour_type: str
+    city: str
+    unit: str
+    rate: float
+    updated_at: str
+
+
+class QSLabourRateInput(BaseModel):
+    id: Optional[str] = None
+    labour_type: str
+    city: str
+    unit: str
+    rate: float
+
+
+class QSExportLogCreate(BaseModel):
+    project_version_id: str
+    export_type: Literal["excel", "pdf"]
+
+
+class QSExportLog(BaseModel):
+    id: str
+    project_version_id: str
+    export_type: str
+    created_at: str
+
+
 class DrawingAnalysisResponse(BaseModel):
     analysis_id: str
     project_name: str
@@ -1373,6 +1534,50 @@ def _build_analysis_summary(analysis: DrawingAnalysisResponse) -> DrawingAnalysi
     )
 
 
+def _coerce_qs_measurement_item(version_id: str, payload: QSMeasurementItemInput) -> QSMeasurementItem:
+    now_iso = _now_iso()
+    return QSMeasurementItem(
+        id=payload.id or str(uuid.uuid4()),
+        project_version_id=version_id,
+        category=payload.category,
+        description=payload.description,
+        length=payload.length,
+        width=payload.width,
+        height=payload.height,
+        depth=payload.depth,
+        diameter=payload.diameter,
+        quantity=payload.quantity,
+        quantity_override=payload.quantity_override,
+        unit=payload.unit,
+        formula=payload.formula,
+        additions=payload.additions,
+        deductions=payload.deductions,
+        wastage_percent=payload.wastage_percent,
+        rate=payload.rate,
+        amount=payload.amount,
+        note=payload.note,
+        created_at=now_iso,
+        updated_at=now_iso,
+    )
+
+
+def _coerce_qs_boq_item(version_id: str, payload: QSBoqItemInput) -> QSBoqItem:
+    now_iso = _now_iso()
+    return QSBoqItem(
+        id=payload.id or str(uuid.uuid4()),
+        project_version_id=version_id,
+        section=payload.section,
+        description=payload.description,
+        qty=payload.qty,
+        unit=payload.unit,
+        rate=payload.rate,
+        total=payload.total,
+        sr_no=payload.sr_no,
+        created_at=now_iso,
+        updated_at=now_iso,
+    )
+
+
 @api_router.get("/")
 async def root():
     return {"message": "AI Estimate Pro API is running"}
@@ -1699,6 +1904,159 @@ async def compare_drawing_analyses(base_analysis_id: str, target_analysis_id: st
         duration_delta_days=target_duration - base_duration,
         boq_deltas=boq_deltas,
     )
+
+
+@api_router.post("/qs/projects", response_model=QSProject)
+async def create_qs_project(payload: QSProjectCreate):
+    project = QSProject(
+        id=str(uuid.uuid4()),
+        project_name=payload.project_name,
+        client_name=payload.client_name,
+        location=payload.location,
+        built_up_area=payload.built_up_area,
+        floors=payload.floors,
+        construction_type=payload.construction_type,
+        rate_profile=payload.rate_profile,
+        created_at=_now_iso(),
+    )
+    await db.qs_projects.insert_one(project.model_dump())
+    return project
+
+
+@api_router.get("/qs/projects", response_model=List[QSProject])
+async def list_qs_projects(limit: int = 50):
+    safe_limit = max(1, min(limit, 200))
+    docs = await db.qs_projects.find({}, {"_id": 0}).sort("created_at", -1).limit(safe_limit).to_list(safe_limit)
+    return [QSProject(**doc) for doc in docs]
+
+
+@api_router.post("/qs/projects/{project_id}/versions", response_model=QSProjectVersion)
+async def create_qs_project_version(project_id: str, payload: QSProjectVersionCreate):
+    project = await db.qs_projects.find_one({"id": project_id}, {"_id": 0, "id": 1})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    version = QSProjectVersion(
+        id=str(uuid.uuid4()),
+        project_id=project_id,
+        version_name=payload.version_name,
+        revision_notes=payload.revision_notes,
+        drawing_files=payload.drawing_files,
+        created_at=_now_iso(),
+    )
+    await db.qs_project_versions.insert_one(version.model_dump())
+    return version
+
+
+@api_router.get("/qs/projects/{project_id}/versions", response_model=List[QSProjectVersion])
+async def list_qs_project_versions(project_id: str):
+    docs = await db.qs_project_versions.find({"project_id": project_id}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return [QSProjectVersion(**doc) for doc in docs]
+
+
+@api_router.post("/qs/versions/{project_version_id}/measurements", response_model=List[QSMeasurementItem])
+async def upsert_qs_measurements(project_version_id: str, payload: QSMeasurementBatchUpsert):
+    version_exists = await db.qs_project_versions.find_one({"id": project_version_id}, {"_id": 0, "id": 1})
+    if not version_exists:
+        raise HTTPException(status_code=404, detail="Project version not found")
+
+    await db.qs_measurement_items.delete_many({"project_version_id": project_version_id})
+    items: List[QSMeasurementItem] = [_coerce_qs_measurement_item(project_version_id, item) for item in payload.items]
+    if items:
+        await db.qs_measurement_items.insert_many([item.model_dump() for item in items])
+    return items
+
+
+@api_router.get("/qs/versions/{project_version_id}/measurements", response_model=List[QSMeasurementItem])
+async def list_qs_measurements(project_version_id: str):
+    docs = await db.qs_measurement_items.find({"project_version_id": project_version_id}, {"_id": 0}).sort("created_at", 1).to_list(5000)
+    return [QSMeasurementItem(**doc) for doc in docs]
+
+
+@api_router.post("/qs/versions/{project_version_id}/boq", response_model=List[QSBoqItem])
+async def upsert_qs_boq(project_version_id: str, payload: QSBoqBatchUpsert):
+    version_exists = await db.qs_project_versions.find_one({"id": project_version_id}, {"_id": 0, "id": 1})
+    if not version_exists:
+        raise HTTPException(status_code=404, detail="Project version not found")
+
+    await db.qs_boq_items.delete_many({"project_version_id": project_version_id})
+    items: List[QSBoqItem] = [_coerce_qs_boq_item(project_version_id, item) for item in payload.items]
+    if items:
+        await db.qs_boq_items.insert_many([item.model_dump() for item in items])
+    return items
+
+
+@api_router.get("/qs/versions/{project_version_id}/boq", response_model=List[QSBoqItem])
+async def list_qs_boq(project_version_id: str):
+    docs = await db.qs_boq_items.find({"project_version_id": project_version_id}, {"_id": 0}).sort("sr_no", 1).to_list(5000)
+    return [QSBoqItem(**doc) for doc in docs]
+
+
+@api_router.post("/qs/rates/material", response_model=List[QSMaterialRate])
+async def upsert_material_rates(payload: List[QSMaterialRateInput]):
+    updated_rows: List[QSMaterialRate] = []
+    for row in payload:
+        item = QSMaterialRate(
+            id=row.id or str(uuid.uuid4()),
+            material_name=row.material_name,
+            city=row.city,
+            unit=row.unit,
+            rate=row.rate,
+            updated_at=_now_iso(),
+        )
+        await db.qs_material_rates.update_one({"id": item.id}, {"$set": item.model_dump()}, upsert=True)
+        updated_rows.append(item)
+    return updated_rows
+
+
+@api_router.get("/qs/rates/material", response_model=List[QSMaterialRate])
+async def list_material_rates(city: Optional[str] = None):
+    query = {"city": city} if city else {}
+    docs = await db.qs_material_rates.find(query, {"_id": 0}).sort("material_name", 1).to_list(5000)
+    return [QSMaterialRate(**doc) for doc in docs]
+
+
+@api_router.post("/qs/rates/labour", response_model=List[QSLabourRate])
+async def upsert_labour_rates(payload: List[QSLabourRateInput]):
+    updated_rows: List[QSLabourRate] = []
+    for row in payload:
+        item = QSLabourRate(
+            id=row.id or str(uuid.uuid4()),
+            labour_type=row.labour_type,
+            city=row.city,
+            unit=row.unit,
+            rate=row.rate,
+            updated_at=_now_iso(),
+        )
+        await db.qs_labour_rates.update_one({"id": item.id}, {"$set": item.model_dump()}, upsert=True)
+        updated_rows.append(item)
+    return updated_rows
+
+
+@api_router.get("/qs/rates/labour", response_model=List[QSLabourRate])
+async def list_labour_rates(city: Optional[str] = None):
+    query = {"city": city} if city else {}
+    docs = await db.qs_labour_rates.find(query, {"_id": 0}).sort("labour_type", 1).to_list(5000)
+    return [QSLabourRate(**doc) for doc in docs]
+
+
+@api_router.post("/qs/export-logs", response_model=QSExportLog)
+async def create_export_log(payload: QSExportLogCreate):
+    log = QSExportLog(
+        id=str(uuid.uuid4()),
+        project_version_id=payload.project_version_id,
+        export_type=payload.export_type,
+        created_at=_now_iso(),
+    )
+    await db.qs_export_logs.insert_one(log.model_dump())
+    return log
+
+
+@api_router.get("/qs/export-logs", response_model=List[QSExportLog])
+async def list_export_logs(project_version_id: Optional[str] = None):
+    query = {"project_version_id": project_version_id} if project_version_id else {}
+    docs = await db.qs_export_logs.find(query, {"_id": 0}).sort("created_at", -1).to_list(5000)
+    return [QSExportLog(**doc) for doc in docs]
 
 
 @api_router.post("/estimate", response_model=EstimateResult)

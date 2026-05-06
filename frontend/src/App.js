@@ -6,10 +6,10 @@ import { TopNav } from "@/components/TopNav";
 import { BuildCalcProvider } from "@/context/BuildCalcContext";
 import AboutPage from "@/pages/AboutPage";
 import DrawingAnalyzerPage from "@/pages/DrawingAnalyzerPage";
-import EstimatePage from "@/pages/EstimatePage";
 import HomePage from "@/pages/HomePage";
 import LocalMarketRatesPage from "@/pages/LocalMarketRatesPage";
 import MaterialsPage from "@/pages/MaterialsPage";
+import QSEstimatorPage from "@/pages/QSEstimatorPage";
 import ReportsPage from "@/pages/ReportsPage";
 import SchedulePage from "@/pages/SchedulePage";
 import SuppliersPage from "@/pages/SuppliersPage";
@@ -23,7 +23,7 @@ function App() {
           <main className="app-main" data-testid="app-main-content">
             <Routes>
               <Route path="/" element={<HomePage />} />
-              <Route path="/estimate" element={<EstimatePage />} />
+              <Route path="/estimate" element={<QSEstimatorPage />} />
               <Route path="/drawing-analyzer" element={<DrawingAnalyzerPage />} />
               <Route path="/boq" element={<MaterialsPage />} />
               <Route path="/local-market-rates" element={<LocalMarketRatesPage />} />

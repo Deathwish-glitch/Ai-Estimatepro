@@ -40,3 +40,25 @@ export const compareDrawingAnalysesApi = (baseAnalysisId, targetAnalysisId) =>
   apiClient.get(
     `/drawing-analyzer/compare?base_analysis_id=${encodeURIComponent(baseAnalysisId)}&target_analysis_id=${encodeURIComponent(targetAnalysisId)}`,
   );
+
+export const createQsProjectApi = (payload) => apiClient.post("/qs/projects", payload);
+export const listQsProjectsApi = (limit = 50) => apiClient.get(`/qs/projects?limit=${limit}`);
+export const createQsProjectVersionApi = (projectId, payload) => apiClient.post(`/qs/projects/${projectId}/versions`, payload);
+export const listQsProjectVersionsApi = (projectId) => apiClient.get(`/qs/projects/${projectId}/versions`);
+
+export const upsertQsMeasurementsApi = (projectVersionId, payload) =>
+  apiClient.post(`/qs/versions/${projectVersionId}/measurements`, payload);
+export const listQsMeasurementsApi = (projectVersionId) =>
+  apiClient.get(`/qs/versions/${projectVersionId}/measurements`);
+
+export const upsertQsBoqApi = (projectVersionId, payload) => apiClient.post(`/qs/versions/${projectVersionId}/boq`, payload);
+export const listQsBoqApi = (projectVersionId) => apiClient.get(`/qs/versions/${projectVersionId}/boq`);
+
+export const upsertMaterialRatesApi = (payload) => apiClient.post("/qs/rates/material", payload);
+export const listMaterialRatesApi = (city) => apiClient.get(`/qs/rates/material${city ? `?city=${encodeURIComponent(city)}` : ""}`);
+export const upsertLabourRatesApi = (payload) => apiClient.post("/qs/rates/labour", payload);
+export const listLabourRatesApi = (city) => apiClient.get(`/qs/rates/labour${city ? `?city=${encodeURIComponent(city)}` : ""}`);
+
+export const createQsExportLogApi = (payload) => apiClient.post("/qs/export-logs", payload);
+export const listQsExportLogsApi = (projectVersionId) =>
+  apiClient.get(`/qs/export-logs${projectVersionId ? `?project_version_id=${encodeURIComponent(projectVersionId)}` : ""}`);
