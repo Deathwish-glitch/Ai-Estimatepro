@@ -11,7 +11,7 @@ from typing import Dict, List, Literal, Optional
 import fitz
 import requests
 from dotenv import load_dotenv
-from emergentintegrations.llm.chat import FileContentWithMimeType, LlmChat, UserMessage
+from emergentintegrations.llm.chat import ChatError, FileContentWithMimeType, LlmChat, UserMessage
 from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Query, UploadFile
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, ValidationError
@@ -1319,12 +1319,27 @@ async def _run_drawing_ai_analysis(image_path: str, mime_type: str, quantity_mod
         f"{json.dumps(DRAWING_JSON_SCHEMA_NOTE)}"
     )
 
-    response_text = await chat.send_message(
-        UserMessage(
-            text=prompt,
-            file_contents=[FileContentWithMimeType(file_path=image_path, mime_type=mime_type)],
+    try:
+        response_text = await chat.send_message(
+            UserMessage(
+                text=prompt,
+                file_contents=[FileContentWithMimeType(file_path=image_path, mime_type=mime_type)],
+            )
         )
-    )
+    except ChatError as error:
+        if "only supported with Gemini provider" not in str(error):
+            raise
+        fallback_chat = LlmChat(
+            api_key=llm_key,
+            session_id=f"drawing-analysis-fallback-{uuid.uuid4()}",
+            system_message=DRAWING_ANALYZER_SYSTEM_PROMPT,
+        ).with_model("gemini", "gemini-2.5-flash")
+        response_text = await fallback_chat.send_message(
+            UserMessage(
+                text=prompt,
+                file_contents=[FileContentWithMimeType(file_path=image_path, mime_type=mime_type)],
+            )
+        )
     return _extract_json_from_text(str(response_text))
 
 

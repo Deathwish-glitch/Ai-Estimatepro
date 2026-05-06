@@ -92,3 +92,61 @@ Extend existing construction estimation app (do not rebuild) with local market i
 2. Add source quality controls (outlier removal + weighted average by recency/reliability).
 3. Add multi-page engineering PDF with embedded drawing snapshot and chart pages.
 4. Add persistent compare presets (A/B/C) and shareable comparison links.
+
+---
+
+## Latest Phase Update — Professional QS + BOQ Workflow (Current Iteration)
+
+### New User Direction Captured
+- Build a **professional civil quantity surveying workflow** (not a simple calculator)
+- Execute in current app first, but keep architecture migration-ready for Next.js + TypeScript + Supabase/Postgres
+- Phase-1 priority order:
+  1. Quantity calculation engine
+  2. Dynamic editable measurement system
+  3. Formula dependency recalculation
+  4. BOQ generation
+  5. Excel/PDF exports
+  6. Deductions/additions engine
+- Drawing scope for phase-1: PDF/image/manual + DWG upload metadata (no full DWG parsing yet)
+
+### New Architecture Additions
+- Frontend state management via **Zustand** (`/app/frontend/src/store/qsStore.js`)
+- Formula and quantity engine module (`/app/frontend/src/utils/qsFormulaEngine.js`)
+- New backend QS APIs under `/api/qs/*` for projects, versions, measurement items, BOQ items, rates, export logs
+- Supabase migration-ready relational SQL scaffold added at `/app/backend/supabase_schema.sql`
+
+### Newly Implemented (This Iteration)
+- `/estimate` upgraded into **Professional QS + BOQ Estimation Studio**
+- Project dashboard with project metadata, drawing attachment metadata, revision creation, revision selection
+- Dynamic measurement sheets with:
+  - inline editable rows
+  - category formulas
+  - additions/deductions/wastage/rate controls
+  - live recalculation of quantity + amount
+  - duplicate/remove row actions
+  - undo/redo snapshots
+- BOQ generator:
+  - regenerate from measurements
+  - manual BOQ line editing
+  - save/load via backend
+- Editable material/labour rate database by city
+- Rough estimate mode (Basic/Standard/Premium/Luxury)
+- Export system:
+  - ExcelJS multi-sheet export (Summary, BOQ, Detailed Measurement, RCC, Steel BBS, Paint, Rate Analysis, Material Summary, Abstract Cost)
+  - professional PDF export with project + measurement + BOQ tables + signatures
+  - export logs persisted
+- Backend test coverage expanded by testing agent for QS workflows
+
+### Updated Backlog Priority
+#### P0
+- Add formula dependency graph UI (show linked cells/rows and recalculation chain)
+- Add row-level copy/paste and keyboard navigation for spreadsheet-like experience
+- Add project metadata update endpoint (currently create/load oriented)
+
+#### P1
+- Introduce Supabase Auth and dual repository mode (Mongo runtime + Supabase switch)
+- Add version restore and side-by-side revision diff for measurements/BOQ
+
+#### P2
+- Add AI-assisted takeoff suggestions on top of manual measurement workflow
+- Add DWG parser service placeholders (`drawingParserService`, `geometryEngine`, `OCRService`) with queue design
