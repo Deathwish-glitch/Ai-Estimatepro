@@ -44,6 +44,6 @@
   "seed_data_creation": "Created test files only (/app/tests/assets/*). No persistent DB seed records created directly in this cycle.",
   "retest_needed": true,
   "should_main_agent_self_test": true,
-  "context_for_next_testing_agent": "Public URL tested: https://buildcalc-estimate.preview.emergentagent.com. Backend pytest suite now includes drawing analyzer coverage in /app/backend/tests/test_drawing_analyzer.py; full suite result: 16/16 pass. Frontend Playwright validated nav route, unsupported-format rejection, PNG analyze flow, manual-vs-AI table, report download action, and route regressions for Estimate/BOQ/Local Market Rates/Suppliers/Reports.",
+  "context_for_next_testing_agent": "Public URL tested: https://civeng-calc.preview.emergentagent.com. Backend pytest suite now includes drawing analyzer coverage in /app/backend/tests/test_drawing_analyzer.py; full suite result: 16/16 pass. Frontend Playwright validated nav route, unsupported-format rejection, PNG analyze flow, manual-vs-AI table, report download action, and route regressions for Estimate/BOQ/Local Market Rates/Suppliers/Reports.",
   "rca of the issue": "Feature gap RCA: drawing analysis backend response includes market_rates_used, but frontend DrawingAnalyzerPage does not render that field. Root cause is missing presentation layer mapping rather than API failure."
 }

@@ -36,6 +36,6 @@
   "seed_data_creation": "UI/API created TEST_ITER8 project inputs and temporary QS measurement changes during regression run.",
   "retest_needed": false,
   "should_main_agent_self_test": true,
-  "context_for_next_testing_agent": "Public URL used from frontend/.env: https://buildcalc-estimate.preview.emergentagent.com. Backend pytest passed 19/19 (qs workflow + weather fallback + drawing analyzer enhancements). Frontend Playwright passed formula regression, unsafe blocking, totals recalculation, comparison tab, weather fallback, drawing analyzer route, and major nav routes.",
+  "context_for_next_testing_agent": "Public URL used from frontend/.env: https://civeng-calc.preview.emergentagent.com. Backend pytest passed 19/19 (qs workflow + weather fallback + drawing analyzer enhancements). Frontend Playwright passed formula regression, unsafe blocking, totals recalculation, comparison tab, weather fallback, drawing analyzer route, and major nav routes.",
   "rca of the issue": "Previously reported regression (valid formulas returning 0) could not be reproduced now. Verification: unit test `qsFormulaEngine.test.js` passed all 3/3 and UI live checks showed valid formulas produce non-zero qty/amount while unsafe expression returns 0."
 }

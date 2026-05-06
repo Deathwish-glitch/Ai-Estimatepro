@@ -35,6 +35,6 @@
   "seed_data_creation": "Created TEST_QS_* project/version and related rows through UI/API during this run.",
   "retest_needed": false,
   "should_main_agent_self_test": true,
-  "context_for_next_testing_agent": "Public URL used: https://buildcalc-estimate.preview.emergentagent.com. Backend pytest pass: 10/10 for QS + weather fallback tests. Frontend validated end-to-end on /estimate including auto-generate, edit recalculation, BOQ save/regenerate, schedule rows, weather fallback (missing OPENWEATHER_API_KEY), export actions/logging, and regression nav pages loading.",
+  "context_for_next_testing_agent": "Public URL used: https://civeng-calc.preview.emergentagent.com. Backend pytest pass: 10/10 for QS + weather fallback tests. Frontend validated end-to-end on /estimate including auto-generate, edit recalculation, BOQ save/regenerate, schedule rows, weather fallback (missing OPENWEATHER_API_KEY), export actions/logging, and regression nav pages loading.",
   "rca of the issue": "No defects reproduced in scoped flows. Weather fallback message is expected because OPENWEATHER_API_KEY is intentionally blank; backend returns graceful response with has_api_key=false and empty forecast_days."
 }

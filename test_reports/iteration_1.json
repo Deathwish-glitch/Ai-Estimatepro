@@ -30,6 +30,6 @@
   "seed_data_creation": "Created TEST_ prefixed saved projects and chat messages through API/UI flows during test execution.",
   "retest_needed": false,
   "should_main_agent_self_test": true,
-  "context_for_next_testing_agent": "Public endpoint tested: https://buildcalc-estimate.preview.emergentagent.com. Backend tests are at /app/backend/tests/test_api_core.py and pass with frontend .env exported before pytest. Chat persistence verified via page reload and history endpoint.",
+  "context_for_next_testing_agent": "Public endpoint tested: https://civeng-calc.preview.emergentagent.com. Backend tests are at /app/backend/tests/test_api_core.py and pass with frontend .env exported before pytest. Chat persistence verified via page reload and history endpoint.",
   "rca of the issue": "No production issue reproduced in this cycle. Prior /api/projects legacy schema compatibility appears stable based on list/get/save API and UI save/list flows."
 }

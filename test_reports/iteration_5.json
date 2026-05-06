@@ -36,6 +36,6 @@
   "seed_data_creation": "Created TEST_* QS projects/versions/rows and rates via API/UI during run.",
   "retest_needed": false,
   "should_main_agent_self_test": true,
-  "context_for_next_testing_agent": "Public URL used: https://buildcalc-estimate.preview.emergentagent.com. Pytest full run passed 33/33 after exporting frontend/.env. UI flows validated end-to-end on /estimate including revision creation and export-log rows creation.",
+  "context_for_next_testing_agent": "Public URL used: https://civeng-calc.preview.emergentagent.com. Pytest full run passed 33/33 after exporting frontend/.env. UI flows validated end-to-end on /estimate including revision creation and export-log rows creation.",
   "rca of the issue": "No product defects found in scoped QS features. One temporary false signal during route regression came from an incorrect selector (`market-rates-page` vs actual `local-market-rates-page`); route itself is healthy."
 }

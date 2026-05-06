@@ -47,6 +47,6 @@
   "seed_data_creation": "Created TEST_ supplier records, market-source entries, WhatsApp-ingested supplier record, and TEST_ project entries via API/UI tests.",
   "retest_needed": true,
   "should_main_agent_self_test": true,
-  "context_for_next_testing_agent": "Public URL tested: https://buildcalc-estimate.preview.emergentagent.com. Added backend regression suite at /app/backend/tests/test_market_supplier_whatsapp.py (market settings/rates, supplier ingestion, trend, contractor comparison, whatsapp parser, projects schema). Pytest result: 13/13 pass.",
+  "context_for_next_testing_agent": "Public URL tested: https://civeng-calc.preview.emergentagent.com. Added backend regression suite at /app/backend/tests/test_market_supplier_whatsapp.py (market settings/rates, supplier ingestion, trend, contractor comparison, whatsapp parser, projects schema). Pytest result: 13/13 pass.",
   "rca of the issue": "Chart warning RCA: Recharts components render while container dimensions are transient/invalid during route/layout transitions, producing width(-1)/height(-1) warnings; likely mount timing/layout measurement issue rather than API failure."
 }
