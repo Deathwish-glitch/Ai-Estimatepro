@@ -1270,8 +1270,9 @@ def _boq_confidence(item_name: str, has_dimensions: bool, quantity_mode: str, wa
     score -= high_warnings * 0.05
     score = max(0.35, min(score, 0.98))
 
+    level: Literal["high", "medium", "low"] = "medium"
     if score >= 0.8:
-        level: Literal["high", "medium", "low"] = "high"
+        level = "high"
     elif score >= 0.6:
         level = "medium"
     else:
@@ -1613,12 +1614,12 @@ def _coerce_qs_boq_item(version_id: str, payload: QSBoqItemInput) -> QSBoqItem:
 
 def _fetch_openweather_forecast(city: str) -> WeatherForecastResponse:
     api_key = os.environ.get("OPENWEATHER_API_KEY", "").strip()
-    if not api_key:
+    if not api_key or api_key == "TEMP_PLACEHOLDER_KEY":
         return WeatherForecastResponse(
             city=city,
             has_api_key=False,
             provider="openweathermap",
-            message="OPENWEATHER_API_KEY missing. Add key to enable live forecast.",
+            message="OPENWEATHER_API_KEY missing/placeholder. Add real key to enable live forecast.",
             forecast_days=[],
         )
 

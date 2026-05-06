@@ -1,3 +1,5 @@
+import { Parser } from "expr-eval";
+
 const toNumber = (value) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -37,6 +39,26 @@ const mathScope = {
   round: Math.round,
 };
 
+const formulaParser = new Parser({
+  operators: {
+    add: true,
+    concatenate: false,
+    conditional: false,
+    divide: true,
+    factorial: false,
+    logical: false,
+    multiply: true,
+    power: true,
+    remainder: true,
+    subtract: true,
+    comparison: false,
+    "in": false,
+    assignment: false,
+  },
+});
+
+const allowedVariables = new Set(["length", "width", "height", "depth", "diameter"]);
+
 export const evaluateFormula = (formula, dimensions) => {
   const safeFormula = String(formula || "").trim();
   if (!safeFormula) return 0;
@@ -51,9 +73,12 @@ export const evaluateFormula = (formula, dimensions) => {
   };
 
   try {
-    // eslint-disable-next-line no-new-func
-    const evaluator = new Function(...Object.keys(scope), `return (${safeFormula});`);
-    const value = evaluator(...Object.values(scope));
+    const expression = formulaParser.parse(safeFormula);
+    const expressionVariables = expression.variables();
+    const hasInvalidVariable = expressionVariables.some((variableName) => !allowedVariables.has(variableName));
+    if (hasInvalidVariable) return 0;
+
+    const value = expression.evaluate(scope);
     return toNumber(value);
   } catch {
     return 0;

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { Line, LineChart, Tooltip, XAxis, YAxis } from "recharts";
 import { toast } from "sonner";
@@ -38,7 +38,7 @@ export default function LocalMarketRatesPage() {
   const [scrapeUrls, setScrapeUrls] = useState("https://example.com/rates-page");
   const [loading, setLoading] = useState(false);
 
-  const fetchData = async (frequency = refreshFrequency) => {
+  const fetchData = useCallback(async (frequency = refreshFrequency) => {
     setLoading(true);
     try {
       const [ratesResponse, trendResponse] = await Promise.all([
@@ -52,7 +52,7 @@ export default function LocalMarketRatesPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [refreshFrequency, trendMaterial]);
 
   useEffect(() => {
     const init = async () => {
@@ -66,12 +66,18 @@ export default function LocalMarketRatesPage() {
       }
     };
     init();
-  }, []);
+  }, [fetchData]);
 
   useEffect(() => {
-    getMarketTrendApi(trendMaterial)
-      .then((response) => setTrendData(response.data.points || []))
-      .catch(() => setTrendData([]));
+    const loadTrend = async () => {
+      try {
+        const response = await getMarketTrendApi(trendMaterial);
+        setTrendData(response.data.points || []);
+      } catch {
+        setTrendData([]);
+      }
+    };
+    loadTrend();
   }, [trendMaterial]);
 
   const updateSourceField = (field, value) => setSourceForm((previous) => ({ ...previous, [field]: value }));

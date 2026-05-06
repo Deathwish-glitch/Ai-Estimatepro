@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Bot, Loader2, MessageCircle, Send, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,6 +7,22 @@ import { useBuildCalc } from "@/context/BuildCalcContext";
 import { createChatSessionApi, getChatHistoryApi, sendChatMessageApi } from "@/services/api";
 
 const CHAT_SESSION_KEY = "ai-estimate-pro-chat-session";
+
+const safeSessionGet = (key) => {
+  try {
+    return sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+
+const safeSessionSet = (key, value) => {
+  try {
+    sessionStorage.setItem(key, value);
+  } catch {
+    // no-op if storage is unavailable
+  }
+};
 
 export const ChatAssistant = () => {
   const { latestEstimate, latestInput } = useBuildCalc();
@@ -30,29 +46,29 @@ export const ChatAssistant = () => {
     ].join(" | ");
   }, [latestEstimate, latestInput]);
 
-  useEffect(() => {
-    const initSession = async () => {
-      try {
-        const storedSessionId = localStorage.getItem(CHAT_SESSION_KEY);
-        if (storedSessionId) {
-          setSessionId(storedSessionId);
-          const history = await getChatHistoryApi(storedSessionId);
-          setMessages(history.data || []);
-          return;
-        }
-
-        const created = await createChatSessionApi();
-        localStorage.setItem(CHAT_SESSION_KEY, created.data.session_id);
-        setSessionId(created.data.session_id);
-      } catch {
-        const fallbackSessionId = `local-${Date.now()}`;
-        localStorage.setItem(CHAT_SESSION_KEY, fallbackSessionId);
-        setSessionId(fallbackSessionId);
+  const initSession = useCallback(async () => {
+    try {
+      const storedSessionId = safeSessionGet(CHAT_SESSION_KEY);
+      if (storedSessionId) {
+        setSessionId(storedSessionId);
+        const history = await getChatHistoryApi(storedSessionId);
+        setMessages(history.data || []);
+        return;
       }
-    };
 
-    initSession();
+      const created = await createChatSessionApi();
+      safeSessionSet(CHAT_SESSION_KEY, created.data.session_id);
+      setSessionId(created.data.session_id);
+    } catch {
+      const fallbackSessionId = `local-${Date.now()}`;
+      safeSessionSet(CHAT_SESSION_KEY, fallbackSessionId);
+      setSessionId(fallbackSessionId);
+    }
   }, []);
+
+  useEffect(() => {
+    initSession();
+  }, [initSession]);
 
   const onSendMessage = async () => {
     if (!input.trim() || !sessionId || loading) return;

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { getProjectsApi, saveProjectApi } from "@/services/api";
 
 const BuildCalcContext = createContext(null);
@@ -6,8 +6,24 @@ const BuildCalcContext = createContext(null);
 const ESTIMATE_STORAGE_KEY = "buildcalc-latest-estimate";
 const INPUT_STORAGE_KEY = "buildcalc-latest-input";
 
+const safeSessionGet = (key) => {
+  try {
+    return sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+
+const safeSessionSet = (key, value) => {
+  try {
+    sessionStorage.setItem(key, value);
+  } catch {
+    // no-op when storage unavailable
+  }
+};
+
 const parseStoredData = (key) => {
-  const value = localStorage.getItem(key);
+  const value = safeSessionGet(key);
   if (!value) return null;
   try {
     return JSON.parse(value);
@@ -24,17 +40,17 @@ export const BuildCalcProvider = ({ children }) => {
 
   useEffect(() => {
     if (latestEstimate) {
-      localStorage.setItem(ESTIMATE_STORAGE_KEY, JSON.stringify(latestEstimate));
+      safeSessionSet(ESTIMATE_STORAGE_KEY, JSON.stringify(latestEstimate));
     }
   }, [latestEstimate]);
 
   useEffect(() => {
     if (latestInput) {
-      localStorage.setItem(INPUT_STORAGE_KEY, JSON.stringify(latestInput));
+      safeSessionSet(INPUT_STORAGE_KEY, JSON.stringify(latestInput));
     }
   }, [latestInput]);
 
-  const refreshProjects = async () => {
+  const refreshProjects = useCallback(async () => {
     setLoadingProjects(true);
     try {
       const response = await getProjectsApi();
@@ -44,11 +60,11 @@ export const BuildCalcProvider = ({ children }) => {
     } finally {
       setLoadingProjects(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     refreshProjects();
-  }, []);
+  }, [refreshProjects]);
 
   const applyEstimate = (inputData, resultData) => {
     setLatestInput(inputData);

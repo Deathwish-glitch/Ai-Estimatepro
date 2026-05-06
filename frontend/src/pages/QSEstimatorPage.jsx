@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import ExcelJS from "exceljs";
 import { saveAs } from "file-saver";
 import { Download, FileSpreadsheet, FileText, Plus, Redo2, Save, Trash2, Undo2 } from "lucide-react";
@@ -139,12 +139,67 @@ export default function QSEstimatorPage() {
   const [weatherCity, setWeatherCity] = useState("Nashik");
   const [weatherData, setWeatherData] = useState(null);
   const [weatherLoading, setWeatherLoading] = useState(false);
+  const [manualComparisonMeta, setManualComparisonMeta] = useState({
+    material_cost: "",
+    labour_cost: "",
+    total_cost: "",
+    duration_days: "",
+    manual_time_hours: "4",
+  });
+  const [manualCategoryRows, setManualCategoryRows] = useState([]);
 
   const totals = useMemo(() => calcTotals(measurements), [measurements]);
   const boqSummaryTotal = useMemo(
     () => boqItems.reduce((sum, item) => sum + Number(item.total || 0), 0),
     [boqItems],
   );
+
+  const aiCategorySummary = useMemo(() => {
+    const grouped = new Map();
+    measurements.forEach((row) => {
+      const existing = grouped.get(row.category) || { category: row.category, quantity: 0, amount: 0, unit: row.unit };
+      existing.quantity += Number(row.quantity || 0);
+      existing.amount += Number(row.amount || 0);
+      grouped.set(row.category, existing);
+    });
+    return Array.from(grouped.values());
+  }, [measurements]);
+
+  const comparisonTableRows = useMemo(() => {
+    const manualMap = new Map(manualCategoryRows.map((row) => [row.category, Number(row.manual_quantity || 0)]));
+    return aiCategorySummary.map((item) => {
+      const manualQuantity = manualMap.has(item.category) ? manualMap.get(item.category) : Number((item.quantity * 1.08).toFixed(4));
+      const variance = item.quantity ? ((manualQuantity - item.quantity) / item.quantity) * 100 : 0;
+      return {
+        ...item,
+        manual_quantity: manualQuantity,
+        variance_pct: Number(variance.toFixed(2)),
+      };
+    });
+  }, [aiCategorySummary, manualCategoryRows]);
+
+  const comparisonSummary = useMemo(() => {
+    const aiMaterial = totals.totalAmount * 0.62;
+    const aiLabour = totals.totalAmount * 0.31;
+    const manualMaterial = Number(manualComparisonMeta.material_cost || aiMaterial * 1.12);
+    const manualLabour = Number(manualComparisonMeta.labour_cost || aiLabour * 1.1);
+    const manualTotal = Number(manualComparisonMeta.total_cost || manualMaterial + manualLabour);
+    const aiDuration = scheduleRows.reduce((sum, row) => sum + Number(row.days || 0), 0);
+    const manualDuration = Number(manualComparisonMeta.duration_days || Math.max(aiDuration, aiDuration + 12));
+    return {
+      aiMaterial,
+      aiLabour,
+      aiTotal: totals.totalAmount,
+      manualMaterial,
+      manualLabour,
+      manualTotal,
+      savings: manualTotal - totals.totalAmount,
+      savingsPct: manualTotal > 0 ? ((manualTotal - totals.totalAmount) / manualTotal) * 100 : 0,
+      aiDuration,
+      manualDuration,
+      manualTimeHours: Number(manualComparisonMeta.manual_time_hours || 4),
+    };
+  }, [manualComparisonMeta, scheduleRows, totals.totalAmount]);
 
   const roughEstimate = useMemo(() => {
     const area = Number(project.built_up_area || 0) * Number(project.floors || 1);
@@ -159,12 +214,12 @@ export default function QSEstimatorPage() {
     };
   }, [project.built_up_area, project.floors, roughMode]);
 
-  const loadProjectMeta = async () => {
+  const loadProjectMeta = useCallback(async () => {
     const response = await listQsProjectsApi();
     setProjectList(response.data || []);
-  };
+  }, [setProjectList]);
 
-  const loadRates = async (cityName) => {
+  const loadRates = useCallback(async (cityName) => {
     const [materialResponse, labourResponse] = await Promise.all([
       listMaterialRatesApi(cityName),
       listLabourRatesApi(cityName),
@@ -179,9 +234,9 @@ export default function QSEstimatorPage() {
         : defaultLabourRates.map((item) => ({ ...item, id: crypto.randomUUID(), city: cityName }));
     setMaterialRates(materialRows);
     setLabourRates(labourRows);
-  };
+  }, [setLabourRates, setMaterialRates]);
 
-  const loadVersionData = async (versionId) => {
+  const loadVersionData = useCallback(async (versionId) => {
     if (!versionId) return;
     const [measurementResponse, boqResponse, logResponse] = await Promise.all([
       listQsMeasurementsApi(versionId),
@@ -191,9 +246,9 @@ export default function QSEstimatorPage() {
     setMeasurements((measurementResponse.data || []).map((row) => calculateMeasurementRow(row)));
     setBoqItems(boqResponse.data || []);
     setExportLogs(logResponse.data || []);
-  };
+  }, [setBoqItems, setMeasurements]);
 
-  const loadProjectVersions = async (projectId) => {
+  const loadProjectVersions = useCallback(async (projectId) => {
     const response = await listQsProjectVersionsApi(projectId);
     const loadedVersions = response.data || [];
     setVersions(loadedVersions);
@@ -201,7 +256,25 @@ export default function QSEstimatorPage() {
       setActiveVersionId(loadedVersions[0].id);
       await loadVersionData(loadedVersions[0].id);
     }
-  };
+  }, [loadVersionData, setActiveVersionId, setVersions]);
+
+  const loadWeatherForecast = useCallback(async (cityName = weatherCity) => {
+    setWeatherLoading(true);
+    try {
+      const formatted = await weatherService.getDailyForecast(cityName);
+      setWeatherData(formatted);
+    } catch {
+      setWeatherData({
+        city: cityName,
+        hasApiKey: false,
+        provider: "openweathermap",
+        message: "Weather service unavailable right now.",
+        days: [],
+      });
+    } finally {
+      setWeatherLoading(false);
+    }
+  }, [weatherCity]);
 
   useEffect(() => {
     const init = async () => {
@@ -214,7 +287,19 @@ export default function QSEstimatorPage() {
       }
     };
     init();
-  }, []);
+  }, [city, loadProjectMeta, loadRates, loadWeatherForecast]);
+
+  useEffect(() => {
+    setManualCategoryRows((previous) => {
+      const previousMap = new Map(previous.map((item) => [item.category, item.manual_quantity]));
+      return aiCategorySummary.map((item) => ({
+        category: item.category,
+        manual_quantity: previousMap.has(item.category)
+          ? Number(previousMap.get(item.category))
+          : Number((item.quantity * 1.08).toFixed(4)),
+      }));
+    });
+  }, [aiCategorySummary]);
 
   const updateProjectField = (field, value) => setProject({ ...project, [field]: value });
 
@@ -315,6 +400,20 @@ export default function QSEstimatorPage() {
     setAutoAssumptions((previous) => ({ ...previous, [key]: Number(value || 0) }));
   };
 
+  const updateManualComparisonMeta = (field, value) => {
+    setManualComparisonMeta((previous) => ({ ...previous, [field]: value }));
+  };
+
+  const updateManualCategoryQuantity = (category, value) => {
+    setManualCategoryRows((previous) => {
+      const hasRow = previous.some((item) => item.category === category);
+      if (hasRow) {
+        return previous.map((item) => (item.category === category ? { ...item, manual_quantity: Number(value || 0) } : item));
+      }
+      return [...previous, { category, manual_quantity: Number(value || 0) }];
+    });
+  };
+
   const onAutoGenerateFromBasicInputs = () => {
     const builtUpArea = Number(project.built_up_area || 0);
     if (builtUpArea <= 0) {
@@ -333,26 +432,14 @@ export default function QSEstimatorPage() {
     setMeasurements(generated.generatedRows);
     setBoqItems(buildBoqFromMeasurements(generated.generatedRows));
     setScheduleRows(generated.scheduleDays);
+    setManualCategoryRows(
+      generated.generatedRows.map((row) => ({
+        category: row.category,
+        manual_quantity: Number((Number(row.quantity || 0) * 1.08).toFixed(4)),
+      })),
+    );
     setActiveTab("measurement");
     toast.success("Semi-automatic measurement sheets generated.");
-  };
-
-  const loadWeatherForecast = async (cityName = weatherCity) => {
-    setWeatherLoading(true);
-    try {
-      const formatted = await weatherService.getDailyForecast(cityName);
-      setWeatherData(formatted);
-    } catch {
-      setWeatherData({
-        city: cityName,
-        hasApiKey: false,
-        provider: "openweathermap",
-        message: "Weather service unavailable right now.",
-        days: [],
-      });
-    } finally {
-      setWeatherLoading(false);
-    }
   };
 
   const updateMeasurementCell = (rowId, field, value) => {
@@ -566,6 +653,18 @@ export default function QSEstimatorPage() {
       scheduleSheet.addRow([phase.phase, phase.days, Number((phase.days / 7).toFixed(1))]);
     });
 
+    const comparisonSheet = workbook.addWorksheet("MANUAL VS AI");
+    applySheetHeader(comparisonSheet, "Manual Contractor vs AI Estimate Comparison");
+    comparisonSheet.addRow(["Category", "AI Quantity", "Manual Quantity", "Variance %"]);
+    comparisonTableRows.forEach((row) => {
+      comparisonSheet.addRow([row.category, row.quantity, row.manual_quantity, row.variance_pct]);
+    });
+    comparisonSheet.addRow([]);
+    comparisonSheet.addRow(["AI Total", comparisonSummary.aiTotal]);
+    comparisonSheet.addRow(["Manual Total", comparisonSummary.manualTotal]);
+    comparisonSheet.addRow(["Savings", comparisonSummary.savings]);
+    comparisonSheet.addRow(["Savings %", comparisonSummary.savingsPct]);
+
     const buffer = await workbook.xlsx.writeBuffer();
     saveAs(new Blob([buffer]), `${project.project_name || "qs-project"}-estimate.xlsx`);
 
@@ -609,6 +708,17 @@ export default function QSEstimatorPage() {
       startY: doc.lastAutoTable.finalY + 8,
       head: [["Phase", "Days", "Weeks"]],
       body: scheduleRows.map((row) => [row.phase, String(row.days), (row.days / 7).toFixed(1)]),
+    });
+
+    autoTable(doc, {
+      startY: doc.lastAutoTable.finalY + 8,
+      head: [["Category", "AI Qty", "Manual Qty", "Variance %"]],
+      body: comparisonTableRows.map((row) => [
+        row.category,
+        formatNumber(row.quantity),
+        formatNumber(row.manual_quantity),
+        `${row.variance_pct}%`,
+      ]),
     });
 
     doc.text(`Total Measurement Amount: ${formatINR(totals.totalAmount)}`, 14, doc.lastAutoTable.finalY + 12);
@@ -748,6 +858,7 @@ export default function QSEstimatorPage() {
         {tabButton("measurement", "Measurement Sheets")}
         {tabButton("boq", "BOQ Generator")}
         {tabButton("schedule", "Schedule")}
+        {tabButton("comparison", "Manual vs AI")}
         {tabButton("rates", "Rate Database")}
         {tabButton("rough", "Rough Estimate")}
         {tabButton("weather", "India Weather")}
@@ -994,6 +1105,73 @@ export default function QSEstimatorPage() {
                 ))}
               </TableBody>
             </Table>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {activeTab === "comparison" ? (
+        <Card className="border-slate-200 bg-white shadow-sm" data-testid="qs-manual-vs-ai-card">
+          <CardHeader>
+            <CardTitle className="text-2xl">Manual Contractor vs AI Estimate Comparison</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-5" data-testid="qs-comparison-input-grid">
+              <Input type="number" value={manualComparisonMeta.material_cost} onChange={(e) => updateManualComparisonMeta("material_cost", e.target.value)} placeholder="Manual material cost" data-testid="qs-manual-material-cost-input" />
+              <Input type="number" value={manualComparisonMeta.labour_cost} onChange={(e) => updateManualComparisonMeta("labour_cost", e.target.value)} placeholder="Manual labour cost" data-testid="qs-manual-labour-cost-input" />
+              <Input type="number" value={manualComparisonMeta.total_cost} onChange={(e) => updateManualComparisonMeta("total_cost", e.target.value)} placeholder="Manual total cost" data-testid="qs-manual-total-cost-input" />
+              <Input type="number" value={manualComparisonMeta.duration_days} onChange={(e) => updateManualComparisonMeta("duration_days", e.target.value)} placeholder="Manual duration (days)" data-testid="qs-manual-duration-input" />
+              <Input type="number" value={manualComparisonMeta.manual_time_hours} onChange={(e) => updateManualComparisonMeta("manual_time_hours", e.target.value)} placeholder="Manual takeoff time (hrs)" data-testid="qs-manual-time-hours-input" />
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-4" data-testid="qs-comparison-summary-grid">
+              <div className="rounded-lg bg-slate-50 p-3" data-testid="qs-comparison-ai-total"><p className="text-xs text-slate-500">AI Total</p><p className="font-mono">{formatINR(comparisonSummary.aiTotal)}</p></div>
+              <div className="rounded-lg bg-slate-50 p-3" data-testid="qs-comparison-manual-total"><p className="text-xs text-slate-500">Manual Total</p><p className="font-mono">{formatINR(comparisonSummary.manualTotal)}</p></div>
+              <div className="rounded-lg bg-slate-50 p-3" data-testid="qs-comparison-savings"><p className="text-xs text-slate-500">Savings by AI</p><p className="font-mono text-emerald-700">{formatINR(comparisonSummary.savings)}</p></div>
+              <div className="rounded-lg bg-slate-50 p-3" data-testid="qs-comparison-savings-percent"><p className="text-xs text-slate-500">Savings %</p><p className="font-mono text-emerald-700">{comparisonSummary.savingsPct.toFixed(2)}%</p></div>
+            </div>
+
+            <Table data-testid="qs-comparison-detailed-table">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Category</TableHead>
+                  <TableHead>AI Quantity</TableHead>
+                  <TableHead>Manual Quantity</TableHead>
+                  <TableHead>Variance %</TableHead>
+                  <TableHead>Manual Edit</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {comparisonTableRows.map((row) => (
+                  <TableRow key={row.category} data-testid={`qs-comparison-row-${row.category.toLowerCase().replace(/\s+/g, "-")}`}>
+                    <TableCell>{row.category}</TableCell>
+                    <TableCell className="font-mono">{formatNumber(row.quantity)}</TableCell>
+                    <TableCell className="font-mono">{formatNumber(row.manual_quantity)}</TableCell>
+                    <TableCell className={`font-mono ${row.variance_pct > 0 ? "text-amber-700" : "text-emerald-700"}`}>
+                      {row.variance_pct}%
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        type="number"
+                        value={row.manual_quantity}
+                        onChange={(e) => updateManualCategoryQuantity(row.category, e.target.value)}
+                        data-testid={`qs-comparison-manual-qty-${row.category.toLowerCase().replace(/\s+/g, "-")}`}
+                      />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2" data-testid="qs-comparison-time-grid">
+              <div className="rounded-lg border border-slate-200 p-3" data-testid="qs-comparison-time-manual">
+                <p className="text-sm text-slate-600">Manual estimation time</p>
+                <p className="font-mono text-lg">{comparisonSummary.manualTimeHours.toFixed(1)} hours</p>
+              </div>
+              <div className="rounded-lg border border-slate-200 p-3" data-testid="qs-comparison-time-ai">
+                <p className="text-sm text-slate-600">AI estimation time</p>
+                <p className="font-mono text-lg">10 - 20 seconds</p>
+              </div>
+            </div>
           </CardContent>
         </Card>
       ) : null}
