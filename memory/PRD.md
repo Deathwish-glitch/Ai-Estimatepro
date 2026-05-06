@@ -181,3 +181,32 @@ Extend existing construction estimation app (do not rebuild) with local market i
 1. Add sheet-level keyboard navigation and copy/paste fill-down interactions for true spreadsheet UX.
 2. Split large frontend/backend files into modular components/routers for maintainability.
 3. Add optional assumption presets by building archetype (villa/apartment/G+1/commercial shell).
+
+---
+
+## Latest Phase Update — Tender-Format Abstract & BOQ Template + Preset Profiles (Current Iteration — Feb 2026)
+
+### User Direction Captured
+- "Use this templates exactly for abstract measurement sheet and BOQ" — based on the Sample BOQ - Commercial Building (Bengaluru) PDF supplied by user.
+- Add details (NOTES per section, floor-wise breakdown, basic rates) and complete the rest of the upcoming P1 tasks.
+- Do not exhaust too many tokens — implement core asks, lean.
+
+### Newly Implemented
+- Created `/app/frontend/src/utils/qsAbstractTemplate.js`:
+  - Exports: `ABSTRACT_SECTIONS` (A-J), `ABSTRACT_ADDENDUM_SECTIONS` (K-N for MEP/Doors/Finishing), `BASIC_RATES` (14 standard items per template), `SECTION_NOTES` (per-section tender notes), `PROJECT_PRESETS` (Villa, G+1 House, Apartment, Commercial), `buildAbstract`, `buildDetailedBoqBySection`, floor-wise splitter.
+- Updated `QSEstimatorPage.jsx`:
+  - **NEW Excel export structure** (sheets in this exact order): PROJECT INFO → SUMMARY - Main Building (A-J + addendum + TOTAL) → BASIC RATES → DETAILED BOQ (each section has 'A' header + NOTE block + table + Sub-Total + Grand Total) → MEASUREMENT SHEET → MANUAL VS AI → EXECUTION SCHEDULE → RATE ANALYSIS.
+  - **NEW PDF export structure**: Title block → SUMMARY (page 1) → BASIC RATES (page 2) → one page per section (A-N) with NOTE block + items + sub-total → Manual vs AI → Schedule → Grand Total + signatures.
+  - **NEW in-app tab "Abstract & BOQ Template"** (testid `qs-tab-abstract`): live preview of SUMMARY, BASIC RATES table, and section-wise detailed BOQ with NOTES, floor-wise rows, sub-totals.
+  - **NEW preset selector** (testid `qs-preset-select-trigger`): one-click apply Villa/G+1/Apartment/Commercial preset that updates floors, rate_profile, room counts and engineering assumptions.
+- Floor-wise breakdown: when project floors > 1, RCC/Columns/Beams/Slabs/Brickwork/Blockwork/Plaster/Flooring/Paint/Waterproofing automatically split across "Ground floor → Seventh floor" labels in both UI and exports.
+
+### Validation Status
+- Testing agent run completed: `iteration_9.json` — backend 100% (10/10 pytest) and frontend 100% (15/15 Playwright steps including Villa preset, all A-N sections, 14 basic rate rows, Excel + PDF export triggers).
+
+### Updated Next Tasks
+1. (Carry-over) Spreadsheet keyboard mode — arrow-key navigation, copy/paste, fill-down for measurement sheet.
+2. (Carry-over) Refactor oversized files: split `QSEstimatorPage.jsx` (~1667 lines) into `MeasurementSheet`, `AbstractTab`, `BoqGenerator`, `Exports` sub-components; split `server.py` into modular routers/services.
+3. (Carry-over) Migrate sensitive items from localStorage to HttpOnly cookies / secure backend session.
+4. Make `BASIC_RATES` editable per-project (currently template defaults; wire to project state).
+5. Add weighted floor-wise distribution (ground/upper/terrace ratios) instead of even split.
