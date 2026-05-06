@@ -30,6 +30,12 @@ import { weatherService } from "@/services/weatherService";
 import { useQsStore } from "@/store/qsStore";
 import { defaultAutoAssumptions, generateSemiAutomaticEstimate } from "@/utils/qsAutoGenerator";
 import { CATEGORY_FORMULAS, buildBoqFromMeasurements, calcTotals, calculateMeasurementRow } from "@/utils/qsFormulaEngine";
+import {
+  BASIC_RATES,
+  PROJECT_PRESETS,
+  buildAbstract,
+  buildDetailedBoqBySection,
+} from "@/utils/qsAbstractTemplate";
 import { formatINR, formatNumber } from "@/utils/formatters";
 
 const categories = [
@@ -147,11 +153,33 @@ export default function QSEstimatorPage() {
     manual_time_hours: "4",
   });
   const [manualCategoryRows, setManualCategoryRows] = useState([]);
+  const [activePreset, setActivePreset] = useState("");
+
+  const applyPreset = useCallback((presetKey) => {
+    const preset = PROJECT_PRESETS[presetKey];
+    if (!preset) return;
+    setActivePreset(presetKey);
+    setProject({
+      ...project,
+      floors: preset.floors,
+      construction_type: preset.construction_type,
+      rate_profile: preset.rate_profile,
+    });
+    setRoomCounts({ ...roomCounts, ...preset.rooms });
+    setAutoAssumptions((prev) => ({ ...prev, ...preset.assumptions }));
+    toast.success(`${preset.label} preset applied. Update built-up area and click Auto Generate.`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project, roomCounts]);
 
   const totals = useMemo(() => calcTotals(measurements), [measurements]);
   const boqSummaryTotal = useMemo(
     () => boqItems.reduce((sum, item) => sum + Number(item.total || 0), 0),
     [boqItems],
+  );
+  const abstractData = useMemo(() => buildAbstract(measurements), [measurements]);
+  const detailedTemplate = useMemo(
+    () => buildDetailedBoqBySection(measurements, Number(project.floors || 1)),
+    [measurements, project.floors],
   );
 
   const aiCategorySummary = useMemo(() => {
@@ -550,120 +578,232 @@ export default function QSEstimatorPage() {
     workbook.creator = "AI Estimate Pro";
     workbook.created = new Date();
 
-    const applySheetHeader = (sheet, title) => {
-      sheet.mergeCells("A1:H1");
-      sheet.getCell("A1").value = title;
-      sheet.getCell("A1").font = { bold: true, size: 13 };
-      sheet.getCell("A1").alignment = { horizontal: "center" };
-      sheet.getCell("A1").fill = {
-        type: "pattern",
-        pattern: "solid",
-        fgColor: { argb: "FFF1F5F9" },
-      };
+    const headerFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E293B" } };
+    const headerFont = { bold: true, color: { argb: "FFFFFFFF" } };
+    const sectionFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF1F5F9" } };
+    const subtotalFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEF3C7" } };
+
+    const setRowStyle = (row, fill, font) => {
+      row.eachCell((cell) => {
+        if (fill) cell.fill = fill;
+        if (font) cell.font = font;
+        cell.border = {
+          top: { style: "thin", color: { argb: "FFCBD5E1" } },
+          bottom: { style: "thin", color: { argb: "FFCBD5E1" } },
+          left: { style: "thin", color: { argb: "FFCBD5E1" } },
+          right: { style: "thin", color: { argb: "FFCBD5E1" } },
+        };
+      });
     };
 
-    const summary = workbook.addWorksheet("ABSTRACT SUMMARY", { views: [{ state: "frozen", ySplit: 2 }] });
-    applySheetHeader(summary, "Professional Civil Estimation Summary");
-    summary.addRow(["Project Name", project.project_name]);
-    summary.addRow(["Client", project.client_name]);
-    summary.addRow(["Location", project.location]);
-    summary.addRow(["Built-up Area", project.built_up_area]);
-    summary.addRow(["Floors", project.floors]);
-    summary.addRow(["Measurement Total", totals.totalAmount]);
-    summary.addRow(["BOQ Total", boqSummaryTotal]);
+    const titleRow = (sheet, title, span = "A1:F1") => {
+      sheet.mergeCells(span);
+      const cell = sheet.getCell(span.split(":")[0]);
+      cell.value = title;
+      cell.font = { bold: true, size: 14, color: { argb: "FFFFFFFF" } };
+      cell.fill = headerFill;
+      cell.alignment = { horizontal: "center", vertical: "middle" };
+      sheet.getRow(1).height = 26;
+    };
 
-    const boqSheet = workbook.addWorksheet("BOQ MASTER", { views: [{ state: "frozen", ySplit: 2 }] });
-    applySheetHeader(boqSheet, "Bill of Quantities");
-    boqSheet.columns = [
-      { header: "Sr No", key: "sr_no", width: 10 },
-      { header: "Section", key: "section", width: 22 },
-      { header: "Description", key: "description", width: 32 },
-      { header: "Quantity", key: "qty", width: 14 },
-      { header: "Unit", key: "unit", width: 12 },
-      { header: "Rate", key: "rate", width: 14 },
-      { header: "Amount", key: "total", width: 16 },
-    ];
-    boqItems.forEach((item) => boqSheet.addRow(item));
-    boqSheet.addRow({ description: "Grand Total", total: { formula: `SUM(G3:G${boqItems.length + 2})` } });
+    // 1) PROJECT INFO
+    const info = workbook.addWorksheet("PROJECT INFO");
+    titleRow(info, "PROFESSIONAL CIVIL ESTIMATION REPORT", "A1:D1");
+    info.addRow([]);
+    info.addRow(["Project", project.project_name || "-"]);
+    info.addRow(["Client", project.client_name || "-"]);
+    info.addRow(["Location", project.location || "-"]);
+    info.addRow(["Subject", "Civil Work - Tender Document"]);
+    info.addRow(["Date", new Date().toLocaleDateString("en-IN")]);
+    info.addRow(["Built-up Area (sqft)", Number(project.built_up_area || 0)]);
+    info.addRow(["Floors", Number(project.floors || 1)]);
+    info.addRow(["Construction Type", project.construction_type || "-"]);
+    info.addRow(["Quality Profile", project.rate_profile || "Standard"]);
+    info.getColumn(1).width = 28;
+    info.getColumn(2).width = 40;
 
-    const measurementSheet = workbook.addWorksheet("MEASUREMENT SHEET", { views: [{ state: "frozen", ySplit: 2 }] });
-    applySheetHeader(measurementSheet, "Detailed Measurement Sheet");
-    measurementSheet.columns = [
-      { header: "Category", key: "category", width: 18 },
-      { header: "Description", key: "description", width: 24 },
-      { header: "Length", key: "length", width: 12 },
-      { header: "Width", key: "width", width: 12 },
-      { header: "Height", key: "height", width: 12 },
-      { header: "Depth", key: "depth", width: 12 },
-      { header: "Formula", key: "formula", width: 24 },
-      { header: "Quantity", key: "quantity", width: 12 },
-      { header: "Rate", key: "rate", width: 12 },
-      { header: "Amount", key: "amount", width: 14 },
-      { header: "Additions", key: "additions", width: 12 },
-      { header: "Deductions", key: "deductions", width: 12 },
-      { header: "Wastage %", key: "wastage_percent", width: 12 },
-    ];
-    measurements.forEach((item) => measurementSheet.addRow(item));
+    // 2) SUMMARY - MAIN BUILDING (Abstract)
+    const abstract = buildAbstract(measurements);
+    const summary = workbook.addWorksheet("SUMMARY - Main Building");
+    titleRow(summary, "SUMMARY - Main Building", "A1:C1");
+    summary.addRow([]);
+    const summaryHeaderRow = summary.addRow(["Sl.No.", "Description of work", "Amount (Rs.)"]);
+    setRowStyle(summaryHeaderRow, headerFill, headerFont);
+    abstract.main.forEach((row) => {
+      const r = summary.addRow([row.code, row.description, Number(row.amount.toFixed(2))]);
+      r.getCell(3).numFmt = "#,##0.00";
+    });
+    if (abstract.addendum.some((row) => row.amount > 0)) {
+      const div = summary.addRow(["", "— Addendum (MEP / Doors / Finishing) —", ""]);
+      setRowStyle(div, sectionFill, { italic: true });
+      abstract.addendum.forEach((row) => {
+        const r = summary.addRow([row.code, row.description, Number(row.amount.toFixed(2))]);
+        r.getCell(3).numFmt = "#,##0.00";
+      });
+    }
+    const totalRow = summary.addRow(["", "TOTAL", Number(abstract.grandTotal.toFixed(2))]);
+    setRowStyle(totalRow, subtotalFill, { bold: true });
+    totalRow.getCell(3).numFmt = "#,##0.00";
+    summary.getColumn(1).width = 10;
+    summary.getColumn(2).width = 50;
+    summary.getColumn(3).width = 18;
 
-    const rccSheet = workbook.addWorksheet("RCC QUANTITY");
-    applySheetHeader(rccSheet, "RCC Quantity Statement");
-    rccSheet.addRow(["Description", "Quantity", "Unit"]);
-    measurements
-      .filter((item) => ["RCC", "Columns", "Beams", "Slabs"].includes(item.category))
-      .forEach((item) => rccSheet.addRow([item.description, item.quantity, item.unit]));
+    // 3) BASIC RATES (without GST)
+    const basic = workbook.addWorksheet("BASIC RATES");
+    titleRow(basic, "BASIC RATES (WITHOUT GST) — for Tender Reference", "A1:D1");
+    basic.addRow([]);
+    const basicHeaderRow = basic.addRow(["Sl.No.", "Description of item", "Rs.", "Unit"]);
+    setRowStyle(basicHeaderRow, headerFill, headerFont);
+    BASIC_RATES.forEach((row) => {
+      const r = basic.addRow([row.sr, row.description, row.rate, row.unit]);
+      r.getCell(3).numFmt = "#,##0.00";
+    });
+    basic.getColumn(1).width = 8;
+    basic.getColumn(2).width = 50;
+    basic.getColumn(3).width = 14;
+    basic.getColumn(4).width = 16;
 
-    const steelSheet = workbook.addWorksheet("STEEL BBS");
-    applySheetHeader(steelSheet, "Steel Bending Schedule");
-    steelSheet.addRow(["Description", "Diameter", "Length", "Qty", "Unit"]);
-    measurements
-      .filter((item) => item.category === "Steel/BBS")
-      .forEach((item) => steelSheet.addRow([item.description, item.diameter, item.length, item.quantity, item.unit]));
+    // 4) DETAILED BOQ — Section by section with NOTES + floor-wise rows
+    const detailed = buildDetailedBoqBySection(measurements, Number(project.floors || 1));
+    const detailedSheet = workbook.addWorksheet("DETAILED BOQ");
+    titleRow(detailedSheet, "DETAILED BILL OF QUANTITIES (Section A - N)", "A1:F1");
+    detailedSheet.addRow([]);
 
-    const paintSheet = workbook.addWorksheet("PAINT CALC");
-    applySheetHeader(paintSheet, "Paint and Surface Calculations");
-    paintSheet.addRow(["Description", "Area", "Rate", "Amount"]);
-    measurements
-      .filter((item) => ["Paint", "Plaster"].includes(item.category))
-      .forEach((item) => paintSheet.addRow([item.description, item.quantity, item.rate, item.amount]));
+    let runningSr = 1;
+    detailed.forEach((section) => {
+      if (!section.rows.length) return;
+      const headRow = detailedSheet.addRow([`'${section.code}'`, section.title, "", "", "", ""]);
+      detailedSheet.mergeCells(`B${headRow.number}:F${headRow.number}`);
+      setRowStyle(headRow, headerFill, headerFont);
+      headRow.getCell(2).font = { bold: true, color: { argb: "FFFFFFFF" } };
 
+      if (section.notes.length) {
+        const note = detailedSheet.addRow([
+          "NOTE:",
+          section.notes.map((n, i) => `${i + 1}. ${n}`).join("  \n"),
+          "",
+          "",
+          "",
+          "",
+        ]);
+        detailedSheet.mergeCells(`B${note.number}:F${note.number}`);
+        note.getCell(2).alignment = { wrapText: true, vertical: "top" };
+        setRowStyle(note, sectionFill);
+      }
+
+      const colHead = detailedSheet.addRow(["Sl.No.", "Description of Work", "Quantity", "UoM", "Rate (Rs.)", "Amount (Rs.)"]);
+      setRowStyle(colHead, sectionFill, { bold: true });
+
+      section.rows.forEach((row) => {
+        const r = detailedSheet.addRow([
+          runningSr++,
+          row.description,
+          Number(Number(row.quantity || 0).toFixed(4)),
+          row.unit,
+          Number(Number(row.rate || 0).toFixed(2)),
+          Number(Number(row.amount || 0).toFixed(2)),
+        ]);
+        r.getCell(5).numFmt = "#,##0.00";
+        r.getCell(6).numFmt = "#,##0.00";
+      });
+      const sub = detailedSheet.addRow(["", `Sub-Total (${section.code})`, "", "", "", Number(section.subtotal.toFixed(2))]);
+      setRowStyle(sub, subtotalFill, { bold: true });
+      sub.getCell(6).numFmt = "#,##0.00";
+      detailedSheet.addRow([]);
+    });
+
+    const grand = detailedSheet.addRow(["", "GRAND TOTAL", "", "", "", Number(abstract.grandTotal.toFixed(2))]);
+    setRowStyle(grand, headerFill, headerFont);
+    grand.getCell(6).numFmt = "#,##0.00";
+
+    detailedSheet.getColumn(1).width = 8;
+    detailedSheet.getColumn(2).width = 50;
+    detailedSheet.getColumn(3).width = 14;
+    detailedSheet.getColumn(4).width = 10;
+    detailedSheet.getColumn(5).width = 14;
+    detailedSheet.getColumn(6).width = 18;
+
+    // 5) Raw measurement sheet (for QS audit)
+    const measurementSheet = workbook.addWorksheet("MEASUREMENT SHEET");
+    titleRow(measurementSheet, "DETAILED MEASUREMENT SHEET (Audit Trail)", "A1:M1");
+    measurementSheet.addRow([]);
+    const mhead = measurementSheet.addRow([
+      "Category",
+      "Description",
+      "L",
+      "W",
+      "H",
+      "D",
+      "Formula",
+      "Add",
+      "Deduct",
+      "Wst%",
+      "Qty",
+      "Unit",
+      "Rate",
+      "Amount",
+    ]);
+    setRowStyle(mhead, headerFill, headerFont);
+    measurements.forEach((item) => {
+      const r = measurementSheet.addRow([
+        item.category,
+        item.description,
+        item.length,
+        item.width,
+        item.height,
+        item.depth,
+        item.formula,
+        item.additions,
+        item.deductions,
+        item.wastage_percent,
+        item.quantity,
+        item.unit,
+        item.rate,
+        item.amount,
+      ]);
+      r.getCell(13).numFmt = "#,##0.00";
+      r.getCell(14).numFmt = "#,##0.00";
+    });
+
+    // 6) MANUAL vs AI
+    const cmp = workbook.addWorksheet("MANUAL VS AI");
+    titleRow(cmp, "MANUAL CONTRACTOR vs AI ESTIMATE COMPARISON", "A1:D1");
+    cmp.addRow([]);
+    const ch = cmp.addRow(["Category", "AI Quantity", "Manual Quantity", "Variance %"]);
+    setRowStyle(ch, headerFill, headerFont);
+    comparisonTableRows.forEach((row) => {
+      cmp.addRow([row.category, row.quantity, row.manual_quantity, row.variance_pct]);
+    });
+    cmp.addRow([]);
+    cmp.addRow(["AI Total", "", "", Number(comparisonSummary.aiTotal.toFixed(2))]);
+    cmp.addRow(["Manual Total", "", "", Number(comparisonSummary.manualTotal.toFixed(2))]);
+    cmp.addRow(["Savings", "", "", Number(comparisonSummary.savings.toFixed(2))]);
+    cmp.addRow(["Savings %", "", "", Number(comparisonSummary.savingsPct.toFixed(2))]);
+    cmp.getColumn(1).width = 22;
+    cmp.getColumn(4).width = 18;
+
+    // 7) EXECUTION SCHEDULE
+    const sched = workbook.addWorksheet("EXECUTION SCHEDULE");
+    titleRow(sched, "AUTO GENERATED CONSTRUCTION SCHEDULE", "A1:C1");
+    sched.addRow([]);
+    const sh = sched.addRow(["Phase", "Days", "Weeks (approx)"]);
+    setRowStyle(sh, headerFill, headerFont);
+    scheduleRows.forEach((phase) => {
+      sched.addRow([phase.phase, phase.days, Number((phase.days / 7).toFixed(1))]);
+    });
+    sched.getColumn(1).width = 28;
+
+    // 8) RATE DATABASE
     const rateSheet = workbook.addWorksheet("RATE ANALYSIS");
-    applySheetHeader(rateSheet, "Material and Labour Rate Analysis");
-    rateSheet.addRow(["Material", "City", "Unit", "Rate"]);
+    titleRow(rateSheet, "MATERIAL & LABOUR RATE ANALYSIS", "A1:D1");
+    rateSheet.addRow([]);
+    const rh1 = rateSheet.addRow(["Material", "City", "Unit", "Rate"]);
+    setRowStyle(rh1, headerFill, headerFont);
     materialRates.forEach((item) => rateSheet.addRow([item.material_name, city, item.unit, item.rate]));
     rateSheet.addRow([]);
-    rateSheet.addRow(["Labour Type", "City", "Unit", "Rate"]);
+    const rh2 = rateSheet.addRow(["Labour Type", "City", "Unit", "Rate"]);
+    setRowStyle(rh2, headerFill, headerFont);
     labourRates.forEach((item) => rateSheet.addRow([item.labour_type, city, item.unit, item.rate]));
-
-    const materialSummary = workbook.addWorksheet("MATERIAL SUMMARY");
-    applySheetHeader(materialSummary, "Material Quantity and Cost Summary");
-    materialSummary.addRow(["Description", "Quantity", "Amount"]);
-    measurements.forEach((item) => materialSummary.addRow([item.description, item.quantity, item.amount]));
-
-    const abstractCost = workbook.addWorksheet("ABSTRACT COST");
-    applySheetHeader(abstractCost, "Abstract Cost Statement");
-    abstractCost.addRow(["Head", "Amount"]);
-    abstractCost.addRow(["Measurement Total", totals.totalAmount]);
-    abstractCost.addRow(["BOQ Total", boqSummaryTotal]);
-    abstractCost.addRow(["Rough Estimate", roughEstimate.total]);
-
-    const scheduleSheet = workbook.addWorksheet("EXECUTION SCHEDULE");
-    applySheetHeader(scheduleSheet, "Auto Generated Construction Schedule");
-    scheduleSheet.addRow(["Phase", "Days", "Weeks"]);
-    scheduleRows.forEach((phase) => {
-      scheduleSheet.addRow([phase.phase, phase.days, Number((phase.days / 7).toFixed(1))]);
-    });
-
-    const comparisonSheet = workbook.addWorksheet("MANUAL VS AI");
-    applySheetHeader(comparisonSheet, "Manual Contractor vs AI Estimate Comparison");
-    comparisonSheet.addRow(["Category", "AI Quantity", "Manual Quantity", "Variance %"]);
-    comparisonTableRows.forEach((row) => {
-      comparisonSheet.addRow([row.category, row.quantity, row.manual_quantity, row.variance_pct]);
-    });
-    comparisonSheet.addRow([]);
-    comparisonSheet.addRow(["AI Total", comparisonSummary.aiTotal]);
-    comparisonSheet.addRow(["Manual Total", comparisonSummary.manualTotal]);
-    comparisonSheet.addRow(["Savings", comparisonSummary.savings]);
-    comparisonSheet.addRow(["Savings %", comparisonSummary.savingsPct]);
 
     const buffer = await workbook.xlsx.writeBuffer();
     saveAs(new Blob([buffer]), `${project.project_name || "qs-project"}-estimate.xlsx`);
@@ -677,41 +817,130 @@ export default function QSEstimatorPage() {
 
   const createPdfExport = async () => {
     const doc = new jsPDF();
-    doc.setFontSize(18);
-    doc.text("Professional Civil Estimation Report", 14, 18);
+    const pageW = doc.internal.pageSize.getWidth();
+    const abstract = buildAbstract(measurements);
+    const detailed = buildDetailedBoqBySection(measurements, Number(project.floors || 1));
+
+    // Title block
+    doc.setFillColor(30, 41, 59);
+    doc.rect(0, 0, pageW, 22, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(15);
+    doc.text("PROFESSIONAL CIVIL ESTIMATION REPORT", 14, 14);
+    doc.setTextColor(0, 0, 0);
+
     doc.setFontSize(10);
-    doc.text(`Project: ${project.project_name}`, 14, 26);
-    doc.text(`Client: ${project.client_name}`, 14, 32);
-    doc.text(`Location: ${project.location} | Floors: ${project.floors}`, 14, 38);
+    doc.text(`Project: ${project.project_name || "-"}`, 14, 30);
+    doc.text(`Client: ${project.client_name || "-"}`, 14, 36);
+    doc.text(`Location: ${project.location || "-"}`, 14, 42);
+    doc.text(`Subject: Civil Work - Tender Document`, 110, 30);
+    doc.text(`Date: ${new Date().toLocaleDateString("en-IN")}`, 110, 36);
+    doc.text(`Built-up: ${formatNumber(Number(project.built_up_area || 0), 0)} sqft | Floors: ${project.floors || 1}`, 110, 42);
 
+    // 1) SUMMARY - Main Building (Abstract)
     autoTable(doc, {
-      startY: 46,
-      head: [["Sr", "Category", "Description", "Qty", "Unit", "Rate", "Amount"]],
-      body: measurements.map((item, index) => [
-        index + 1,
-        item.category,
-        item.description,
-        formatNumber(item.quantity),
-        item.unit,
-        formatINR(item.rate),
-        formatINR(item.amount),
-      ]),
+      startY: 50,
+      head: [["Sl.No.", "Description of work", "Amount (Rs.)"]],
+      body: [
+        ...abstract.main.map((row) => [row.code, row.description, formatINR(row.amount)]),
+        ...(abstract.addendum.some((r) => r.amount > 0)
+          ? [
+              [{ content: "— Addendum (MEP / Doors / Finishing) —", colSpan: 3, styles: { fillColor: [241, 245, 249], halign: "center", fontStyle: "italic" } }],
+              ...abstract.addendum.map((row) => [row.code, row.description, formatINR(row.amount)]),
+            ]
+          : []),
+        [
+          { content: "TOTAL", colSpan: 2, styles: { fillColor: [254, 243, 199], fontStyle: "bold", halign: "right" } },
+          { content: formatINR(abstract.grandTotal), styles: { fillColor: [254, 243, 199], fontStyle: "bold" } },
+        ],
+      ],
+      headStyles: { fillColor: [30, 41, 59], textColor: 255, fontStyle: "bold" },
+      styles: { fontSize: 9, cellPadding: 3 },
+      didDrawPage: () => {
+        doc.setFontSize(11);
+        doc.setFont("helvetica", "bold");
+        doc.text("SUMMARY - Main Building", 14, 48);
+        doc.setFont("helvetica", "normal");
+      },
     });
 
+    // 2) BASIC RATES (without GST)
+    doc.addPage();
+    doc.setFontSize(12);
+    doc.setFont("helvetica", "bold");
+    doc.text("BASIC RATES (WITHOUT GST) — for Tender Reference", 14, 16);
+    doc.setFont("helvetica", "normal");
     autoTable(doc, {
-      startY: doc.lastAutoTable.finalY + 8,
-      head: [["Sr", "Section", "Description", "Qty", "Unit", "Rate", "Total"]],
-      body: boqItems.map((item, index) => [index + 1, item.section, item.description, item.qty, item.unit, formatINR(item.rate), formatINR(item.total)]),
+      startY: 22,
+      head: [["Sl.No.", "Description of item", "Rs.", "Unit"]],
+      body: BASIC_RATES.map((row) => [row.sr, row.description, formatINR(row.rate), row.unit]),
+      headStyles: { fillColor: [30, 41, 59], textColor: 255, fontStyle: "bold" },
+      styles: { fontSize: 9, cellPadding: 3 },
     });
 
-    autoTable(doc, {
-      startY: doc.lastAutoTable.finalY + 8,
-      head: [["Phase", "Days", "Weeks"]],
-      body: scheduleRows.map((row) => [row.phase, String(row.days), (row.days / 7).toFixed(1)]),
+    // 3) Detailed BOQ — Section by section with NOTES
+    let runningSr = 1;
+    detailed.forEach((section) => {
+      if (!section.rows.length) return;
+      doc.addPage();
+      doc.setFillColor(30, 41, 59);
+      doc.rect(0, 0, pageW, 18, "F");
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(13);
+      doc.text(`'${section.code}'  ${section.title}`, 14, 12);
+      doc.setTextColor(0, 0, 0);
+
+      let yStart = 26;
+      if (section.notes.length) {
+        doc.setFontSize(8);
+        doc.setFont("helvetica", "bold");
+        doc.text("NOTE:", 14, yStart);
+        doc.setFont("helvetica", "normal");
+        section.notes.forEach((note, idx) => {
+          const lines = doc.splitTextToSize(`${idx + 1}. ${note}`, pageW - 28);
+          doc.text(lines, 14, yStart + 5 + idx * 6);
+        });
+        yStart += 5 + section.notes.length * 6 + 4;
+      }
+
+      autoTable(doc, {
+        startY: yStart,
+        head: [["Sl.No.", "Description of Work", "Quantity", "UoM", "Rate (Rs.)", "Amount (Rs.)"]],
+        body: [
+          ...section.rows.map((row) => [
+            runningSr++,
+            row.description,
+            formatNumber(row.quantity),
+            row.unit,
+            formatINR(row.rate),
+            formatINR(row.amount),
+          ]),
+          [
+            { content: `Sub-Total (${section.code})`, colSpan: 5, styles: { fillColor: [254, 243, 199], fontStyle: "bold", halign: "right" } },
+            { content: formatINR(section.subtotal), styles: { fillColor: [254, 243, 199], fontStyle: "bold" } },
+          ],
+        ],
+        headStyles: { fillColor: [30, 41, 59], textColor: 255, fontStyle: "bold" },
+        styles: { fontSize: 8, cellPadding: 2.5 },
+        columnStyles: {
+          0: { cellWidth: 14 },
+          1: { cellWidth: 80 },
+          2: { cellWidth: 22 },
+          3: { cellWidth: 16 },
+          4: { cellWidth: 24 },
+          5: { cellWidth: 28 },
+        },
+      });
     });
 
+    // 4) Manual vs AI
+    doc.addPage();
+    doc.setFontSize(12);
+    doc.setFont("helvetica", "bold");
+    doc.text("MANUAL CONTRACTOR vs AI ESTIMATE COMPARISON", 14, 16);
+    doc.setFont("helvetica", "normal");
     autoTable(doc, {
-      startY: doc.lastAutoTable.finalY + 8,
+      startY: 22,
       head: [["Category", "AI Qty", "Manual Qty", "Variance %"]],
       body: comparisonTableRows.map((row) => [
         row.category,
@@ -719,12 +948,40 @@ export default function QSEstimatorPage() {
         formatNumber(row.manual_quantity),
         `${row.variance_pct}%`,
       ]),
+      headStyles: { fillColor: [30, 41, 59], textColor: 255 },
+      styles: { fontSize: 9 },
+    });
+    autoTable(doc, {
+      startY: doc.lastAutoTable.finalY + 6,
+      body: [
+        ["AI Total", formatINR(comparisonSummary.aiTotal)],
+        ["Manual Total", formatINR(comparisonSummary.manualTotal)],
+        ["Savings by AI", formatINR(comparisonSummary.savings)],
+        ["Savings %", `${comparisonSummary.savingsPct.toFixed(2)}%`],
+      ],
+      styles: { fontSize: 10 },
     });
 
-    doc.text(`Total Measurement Amount: ${formatINR(totals.totalAmount)}`, 14, doc.lastAutoTable.finalY + 12);
-    doc.text(`Total BOQ Amount: ${formatINR(boqSummaryTotal)}`, 14, doc.lastAutoTable.finalY + 18);
-    doc.text("Prepared by: _____________________", 14, doc.lastAutoTable.finalY + 28);
-    doc.text("Approved by: _____________________", 110, doc.lastAutoTable.finalY + 28);
+    // 5) Schedule
+    if (scheduleRows.length) {
+      autoTable(doc, {
+        startY: doc.lastAutoTable.finalY + 8,
+        head: [["Construction Phase", "Days", "Weeks (approx)"]],
+        body: scheduleRows.map((row) => [row.phase, String(row.days), (row.days / 7).toFixed(1)]),
+        headStyles: { fillColor: [30, 41, 59], textColor: 255 },
+        styles: { fontSize: 9 },
+      });
+    }
+
+    // Final grand total + signatures
+    doc.setFontSize(13);
+    doc.setFont("helvetica", "bold");
+    doc.text(`GRAND TOTAL: ${formatINR(abstract.grandTotal)}`, 14, doc.lastAutoTable.finalY + 16);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.text("Sample BOQ format aligned to Indian tender practice. All rates are without GST.", 14, doc.lastAutoTable.finalY + 24);
+    doc.text("Prepared by: _____________________", 14, doc.lastAutoTable.finalY + 36);
+    doc.text("Approved by: _____________________", 110, doc.lastAutoTable.finalY + 36);
 
     doc.save(`${project.project_name || "qs-project"}-estimate.pdf`);
 
@@ -799,6 +1056,18 @@ export default function QSEstimatorPage() {
             <Button onClick={onCreateProject} disabled={loadingProject} data-testid="qs-create-project-button"><Save size={16} /> {loadingProject ? "Saving..." : "Create Project"}</Button>
             <Button variant="secondary" onClick={onCreateRevision} data-testid="qs-create-revision-button"><Plus size={16} /> New Revision</Button>
             <Button variant="default" onClick={onAutoGenerateFromBasicInputs} data-testid="qs-auto-generate-button">Auto Generate Estimate</Button>
+            <Select value={activePreset} onValueChange={applyPreset}>
+              <SelectTrigger className="w-[220px]" data-testid="qs-preset-select-trigger">
+                <SelectValue placeholder="Apply preset profile" />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(PROJECT_PRESETS).map(([key, preset]) => (
+                  <SelectItem key={key} value={key} data-testid={`qs-preset-item-${key.toLowerCase().replace(/\s+/g, "-")}`}>
+                    {preset.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <Select value={activeVersionId} onValueChange={onVersionChange}>
               <SelectTrigger className="w-[220px]" data-testid="qs-version-select-trigger">
                 <SelectValue placeholder="Select revision" />
@@ -856,6 +1125,7 @@ export default function QSEstimatorPage() {
 
       <div className="flex flex-wrap gap-2" data-testid="qs-tab-navigation">
         {tabButton("measurement", "Measurement Sheets")}
+        {tabButton("abstract", "Abstract & BOQ Template")}
         {tabButton("boq", "BOQ Generator")}
         {tabButton("schedule", "Schedule")}
         {tabButton("comparison", "Manual vs AI")}
@@ -943,6 +1213,139 @@ export default function QSEstimatorPage() {
               <div className="rounded-lg bg-slate-50 p-3" data-testid="qs-total-amount-card"><p className="text-xs text-slate-500">Measurement Total</p><p className="font-mono text-lg">{formatINR(totals.totalAmount)}</p></div>
               <div className="rounded-lg bg-slate-50 p-3" data-testid="qs-boq-total-card"><p className="text-xs text-slate-500">BOQ Total</p><p className="font-mono text-lg">{formatINR(boqSummaryTotal)}</p></div>
             </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {activeTab === "abstract" ? (
+        <Card className="border-slate-200 bg-white shadow-sm" data-testid="qs-abstract-card">
+          <CardHeader>
+            <CardTitle className="text-2xl" data-testid="qs-abstract-title">Abstract & Section-wise BOQ Template</CardTitle>
+            <p className="text-sm text-slate-600" data-testid="qs-abstract-subtitle">
+              Aligned with the standard tender BOQ template (Sections A-J + addendum). Exports follow this structure exactly.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <section data-testid="qs-abstract-summary-section">
+              <p className="mb-2 text-sm font-semibold text-slate-700">SUMMARY - Main Building</p>
+              <Table data-testid="qs-abstract-summary-table">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Sl.No.</TableHead>
+                    <TableHead>Description of work</TableHead>
+                    <TableHead className="text-right">Amount (Rs.)</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {abstractData.main.map((row) => (
+                    <TableRow key={row.code} data-testid={`qs-abstract-row-${row.code}`}>
+                      <TableCell className="font-mono">{row.code}</TableCell>
+                      <TableCell>{row.description}</TableCell>
+                      <TableCell className="font-mono text-right">{formatINR(row.amount)}</TableCell>
+                    </TableRow>
+                  ))}
+                  {abstractData.addendum.some((r) => r.amount > 0) ? (
+                    <>
+                      <TableRow data-testid="qs-abstract-addendum-divider">
+                        <TableCell colSpan={3} className="bg-slate-50 italic text-center text-xs">
+                          — Addendum (MEP / Doors / Finishing) —
+                        </TableCell>
+                      </TableRow>
+                      {abstractData.addendum.map((row) => (
+                        <TableRow key={row.code} data-testid={`qs-abstract-row-${row.code}`}>
+                          <TableCell className="font-mono">{row.code}</TableCell>
+                          <TableCell>{row.description}</TableCell>
+                          <TableCell className="font-mono text-right">{formatINR(row.amount)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </>
+                  ) : null}
+                  <TableRow data-testid="qs-abstract-grand-total-row">
+                    <TableCell colSpan={2} className="text-right font-semibold bg-amber-50">TOTAL</TableCell>
+                    <TableCell className="font-mono text-right font-semibold bg-amber-50">
+                      {formatINR(abstractData.grandTotal)}
+                    </TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </section>
+
+            <section data-testid="qs-basic-rates-section">
+              <p className="mb-2 text-sm font-semibold text-slate-700">BASIC RATES (WITHOUT GST) — for Tender Reference</p>
+              <Table data-testid="qs-basic-rates-table">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Sl.No.</TableHead>
+                    <TableHead>Description of item</TableHead>
+                    <TableHead className="text-right">Rs.</TableHead>
+                    <TableHead>Unit</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {BASIC_RATES.map((row) => (
+                    <TableRow key={row.sr} data-testid={`qs-basic-rate-row-${row.sr}`}>
+                      <TableCell className="font-mono">{row.sr}</TableCell>
+                      <TableCell>{row.description}</TableCell>
+                      <TableCell className="font-mono text-right">{formatINR(row.rate)}</TableCell>
+                      <TableCell>{row.unit}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </section>
+
+            <section data-testid="qs-detailed-template-section" className="space-y-4">
+              <p className="text-sm font-semibold text-slate-700">DETAILED BOQ — Section A to N (with NOTES + floor-wise rows)</p>
+              {detailedTemplate.map((section) => (
+                <div key={section.code} className="rounded-lg border border-slate-200" data-testid={`qs-section-${section.code}`}>
+                  <div className="bg-slate-900 px-3 py-2 text-white">
+                    <p className="text-sm font-semibold">'{section.code}'  {section.title}</p>
+                  </div>
+                  {section.notes.length ? (
+                    <div className="bg-slate-50 px-3 py-2 text-xs text-slate-700" data-testid={`qs-section-notes-${section.code}`}>
+                      <p className="font-semibold">NOTE:</p>
+                      <ul className="list-decimal pl-5">
+                        {section.notes.map((note, idx) => <li key={idx}>{note}</li>)}
+                      </ul>
+                    </div>
+                  ) : null}
+                  {section.rows.length ? (
+                    <Table data-testid={`qs-section-table-${section.code}`}>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Description of Work</TableHead>
+                          <TableHead className="text-right">Qty</TableHead>
+                          <TableHead>UoM</TableHead>
+                          <TableHead className="text-right">Rate (Rs.)</TableHead>
+                          <TableHead className="text-right">Amount (Rs.)</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {section.rows.map((row, idx) => (
+                          <TableRow key={`${section.code}-${idx}`} data-testid={`qs-section-row-${section.code}-${idx}`}>
+                            <TableCell>{row.description}</TableCell>
+                            <TableCell className="font-mono text-right">{formatNumber(row.quantity)}</TableCell>
+                            <TableCell>{row.unit}</TableCell>
+                            <TableCell className="font-mono text-right">{formatINR(row.rate)}</TableCell>
+                            <TableCell className="font-mono text-right">{formatINR(row.amount)}</TableCell>
+                          </TableRow>
+                        ))}
+                        <TableRow data-testid={`qs-section-subtotal-${section.code}`}>
+                          <TableCell colSpan={4} className="text-right font-semibold bg-amber-50">
+                            Sub-Total ({section.code})
+                          </TableCell>
+                          <TableCell className="font-mono text-right font-semibold bg-amber-50">
+                            {formatINR(section.subtotal)}
+                          </TableCell>
+                        </TableRow>
+                      </TableBody>
+                    </Table>
+                  ) : (
+                    <p className="px-3 py-3 text-xs text-slate-500" data-testid={`qs-section-empty-${section.code}`}>No items in this section yet.</p>
+                  )}
+                </div>
+              ))}
+            </section>
           </CardContent>
         </Card>
       ) : null}
