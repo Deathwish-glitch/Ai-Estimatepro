@@ -150,3 +150,34 @@ Extend existing construction estimation app (do not rebuild) with local market i
 #### P2
 - Add AI-assisted takeoff suggestions on top of manual measurement workflow
 - Add DWG parser service placeholders (`drawingParserService`, `geometryEngine`, `OCRService`) with queue design
+
+---
+
+## Latest Phase Update — Semi-Automatic Estimation Engine + Weather Tab
+
+### User Direction Captured
+- Auto-generate professional estimate from basic inputs (project/client/location/built-up area/floors/type/quality + optional room counts)
+- Keep all generated values fully editable (quantity/rate/formula/additions/deductions)
+- Use uploaded Excel samples as structure inspiration but modernize with cleaner professional exports
+- Add separate India weather forecast tab using OpenWeather architecture with graceful missing-key fallback
+
+### Newly Implemented
+- Added semi-automatic generation logic (`/app/frontend/src/utils/qsAutoGenerator.js`) using engineering ratios and quality multipliers
+- One-click generation now creates editable rows across major construction heads (Excavation, PCC, RCC, Brickwork, Plaster, Flooring, Paint, Waterproofing, Steel/BBS, Plumbing, Electrical, Finishing, etc.)
+- Added editable assumptions panel and optional room-count inputs to influence generated takeoff
+- Auto-generated day/week construction schedule tab integrated with generated estimate
+- Added modular weather stack:
+  - `weatherProviderAdapter`
+  - `forecastFormatter`
+  - `weatherService`
+  - backend `/api/weather/forecast` endpoint with OpenWeather integration and graceful fallback when `OPENWEATHER_API_KEY` is blank
+- Export templates modernized with professional multi-sheet naming and section headers inspired by provided files
+
+### Validation Status
+- Testing agent run completed for new flow (`iteration_6`) with backend + frontend pass
+- No critical/minor runtime defects found in scoped features
+
+### Updated Next Tasks
+1. Add sheet-level keyboard navigation and copy/paste fill-down interactions for true spreadsheet UX.
+2. Split large frontend/backend files into modular components/routers for maintainability.
+3. Add optional assumption presets by building archetype (villa/apartment/G+1/commercial shell).
