@@ -63,4 +63,5 @@ export const createQsExportLogApi = (payload) => apiClient.post("/qs/export-logs
 export const listQsExportLogsApi = (projectVersionId) =>
   apiClient.get(`/qs/export-logs${projectVersionId ? `?project_version_id=${encodeURIComponent(projectVersionId)}` : ""}`);
 
-export const getWeatherForecastApi = (city) => apiClient.get(`/weather/forecast?city=${encodeURIComponent(city)}`);
+export const getWeatherForecastApi = (city, apiKey = "") =>
+  apiClient.get(`/weather/forecast?city=${encodeURIComponent(city)}${apiKey ? `&api_key=${encodeURIComponent(apiKey)}` : ""}`);

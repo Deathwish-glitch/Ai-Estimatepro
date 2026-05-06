@@ -63,22 +63,46 @@ const categories = [
   "Finishing",
 ];
 
+// Default rates aligned to Feb 2026 Indian market (Nashik benchmark).
+// All rates are user-editable; UI exposes them in the Rate Database tab.
 const defaultMaterialRates = [
-  { material_name: "Cement", unit: "bag", rate: 382 },
-  { material_name: "Steel", unit: "kg", rate: 61 },
-  { material_name: "Sand", unit: "brass", rate: 3350 },
-  { material_name: "Aggregate", unit: "m3", rate: 1450 },
-  { material_name: "Brick", unit: "nos", rate: 9.5 },
-  { material_name: "Paint", unit: "ltr", rate: 320 },
-  { material_name: "Tile", unit: "sqft", rate: 72 },
+  { material_name: "Cement (OPC 53 grade)", unit: "bag (50kg)", rate: 410 },
+  { material_name: "Cement (PPC)", unit: "bag (50kg)", rate: 380 },
+  { material_name: "TMT Steel Fe-500", unit: "kg", rate: 68 },
+  { material_name: "TMT Steel Fe-550D", unit: "kg", rate: 72 },
+  { material_name: "River Sand", unit: "brass (100 cft)", rate: 6800 },
+  { material_name: "M-Sand", unit: "brass (100 cft)", rate: 4200 },
+  { material_name: "Plaster Sand (M-Sand)", unit: "brass (100 cft)", rate: 5400 },
+  { material_name: "Coarse Aggregate 20mm", unit: "brass (100 cft)", rate: 5800 },
+  { material_name: "Coarse Aggregate 12mm", unit: "brass (100 cft)", rate: 6200 },
+  { material_name: "Red Brick (1st class)", unit: "nos", rate: 11 },
+  { material_name: "Fly Ash Brick", unit: "nos", rate: 8.5 },
+  { material_name: "AAC Block 200mm", unit: "nos", rate: 78 },
+  { material_name: "Solid Concrete Block 200mm", unit: "nos", rate: 56 },
+  { material_name: "Vitrified Tile (2x2)", unit: "sqft", rate: 95 },
+  { material_name: "Granite Flooring", unit: "sqft", rate: 220 },
+  { material_name: "Marble Flooring", unit: "sqft", rate: 180 },
+  { material_name: "Emulsion Paint (Premium)", unit: "ltr", rate: 380 },
+  { material_name: "Distemper Paint", unit: "ltr", rate: 145 },
+  { material_name: "Exterior Apex Paint", unit: "ltr", rate: 410 },
+  { material_name: "Waterproofing (Liquid)", unit: "kg", rate: 280 },
+  { material_name: "RMC M25", unit: "m3 (cum)", rate: 6200 },
+  { material_name: "RMC M30", unit: "m3 (cum)", rate: 6700 },
 ];
 
 const defaultLabourRates = [
-  { labour_type: "Mason", unit: "day", rate: 950 },
-  { labour_type: "Helper", unit: "day", rate: 650 },
-  { labour_type: "Bar Bender", unit: "day", rate: 900 },
-  { labour_type: "Carpenter", unit: "day", rate: 980 },
-  { labour_type: "Painter", unit: "day", rate: 880 },
+  { labour_type: "Mason (Skilled)", unit: "day", rate: 1100 },
+  { labour_type: "Mason (Helper / Unskilled)", unit: "day", rate: 700 },
+  { labour_type: "Bar Bender", unit: "day", rate: 1050 },
+  { labour_type: "Carpenter (Shuttering)", unit: "day", rate: 1150 },
+  { labour_type: "Carpenter (Furniture)", unit: "day", rate: 1300 },
+  { labour_type: "Painter", unit: "day", rate: 950 },
+  { labour_type: "Plumber", unit: "day", rate: 1100 },
+  { labour_type: "Electrician", unit: "day", rate: 1100 },
+  { labour_type: "Tile Mason", unit: "day", rate: 1200 },
+  { labour_type: "Welder", unit: "day", rate: 1050 },
+  { labour_type: "Plaster Mason", unit: "day", rate: 1050 },
+  { labour_type: "Site Supervisor", unit: "day", rate: 1500 },
 ];
 
 const roughModes = {
@@ -143,6 +167,9 @@ export default function QSEstimatorPage() {
   const [autoAssumptions, setAutoAssumptions] = useState(defaultAutoAssumptions);
   const [scheduleRows, setScheduleRows] = useState([]);
   const [weatherCity, setWeatherCity] = useState("Nashik");
+  const [weatherApiKey, setWeatherApiKey] = useState(() => {
+    try { return localStorage.getItem("ai_estimate_pro_owm_key") || ""; } catch { return ""; }
+  });
   const [weatherData, setWeatherData] = useState(null);
   const [weatherLoading, setWeatherLoading] = useState(false);
   const [manualComparisonMeta, setManualComparisonMeta] = useState({
@@ -289,7 +316,7 @@ export default function QSEstimatorPage() {
   const loadWeatherForecast = useCallback(async (cityName = weatherCity) => {
     setWeatherLoading(true);
     try {
-      const formatted = await weatherService.getDailyForecast(cityName);
+      const formatted = await weatherService.getDailyForecast(cityName, weatherApiKey);
       setWeatherData(formatted);
     } catch {
       setWeatherData({
@@ -302,7 +329,17 @@ export default function QSEstimatorPage() {
     } finally {
       setWeatherLoading(false);
     }
-  }, [weatherCity]);
+  }, [weatherCity, weatherApiKey]);
+
+  const saveWeatherApiKey = (value) => {
+    setWeatherApiKey(value);
+    try {
+      if (value) localStorage.setItem("ai_estimate_pro_owm_key", value);
+      else localStorage.removeItem("ai_estimate_pro_owm_key");
+    } catch {
+      // Ignore storage errors (incognito mode, etc.)
+    }
+  };
 
   useEffect(() => {
     const init = async () => {
@@ -574,7 +611,12 @@ export default function QSEstimatorPage() {
   };
 
   const createExcelExport = async () => {
-    const workbook = new ExcelJS.Workbook();
+    if (!measurements.length) {
+      toast.error("No measurements yet. Click 'Auto Generate Estimate' or add rows manually before exporting.");
+      return;
+    }
+    try {
+      const workbook = new ExcelJS.Workbook();
     workbook.creator = "AI Estimate Pro";
     workbook.created = new Date();
 
@@ -807,15 +849,26 @@ export default function QSEstimatorPage() {
 
     const buffer = await workbook.xlsx.writeBuffer();
     saveAs(new Blob([buffer]), `${project.project_name || "qs-project"}-estimate.xlsx`);
+    toast.success("Excel report downloaded.");
 
     if (activeVersionId) {
       await createQsExportLogApi({ project_version_id: activeVersionId, export_type: "excel" });
       const logs = await listQsExportLogsApi(activeVersionId);
       setExportLogs(logs.data || []);
     }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("Excel export failed:", err);
+      toast.error("Excel export failed. Please refresh and try again.");
+    }
   };
 
   const createPdfExport = async () => {
+    if (!measurements.length) {
+      toast.error("No measurements yet. Click 'Auto Generate Estimate' or add rows manually before exporting.");
+      return;
+    }
+    try {
     const doc = new jsPDF();
     const pageW = doc.internal.pageSize.getWidth();
     const abstract = buildAbstract(measurements);
@@ -984,11 +1037,17 @@ export default function QSEstimatorPage() {
     doc.text("Approved by: _____________________", 110, doc.lastAutoTable.finalY + 36);
 
     doc.save(`${project.project_name || "qs-project"}-estimate.pdf`);
+    toast.success("PDF report downloaded.");
 
     if (activeVersionId) {
       await createQsExportLogApi({ project_version_id: activeVersionId, export_type: "pdf" });
       const logs = await listQsExportLogsApi(activeVersionId);
       setExportLogs(logs.data || []);
+    }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("PDF export failed:", err);
+      toast.error("PDF export failed. Please refresh and try again.");
     }
   };
 
@@ -1482,32 +1541,180 @@ export default function QSEstimatorPage() {
       {activeTab === "schedule" ? (
         <Card className="border-slate-200 bg-white shadow-sm" data-testid="qs-schedule-card">
           <CardHeader>
-            <CardTitle className="text-2xl">Auto Construction Schedule (Day + Week Views)</CardTitle>
+            <CardTitle className="text-2xl" data-testid="qs-schedule-title">Construction Execution Timeline</CardTitle>
+            <p className="text-sm text-slate-600" data-testid="qs-schedule-subtitle">
+              Auto generated from your project inputs — phase durations, weekly view and Gantt-style timeline.
+            </p>
           </CardHeader>
-          <CardContent className="space-y-3">
+          <CardContent className="space-y-6">
             {!scheduleRows.length ? (
-              <p className="text-sm text-slate-600" data-testid="qs-schedule-empty-text">
-                Run <strong>Auto Generate Estimate</strong> to produce schedule from project inputs.
-              </p>
-            ) : null}
-            <Table data-testid="qs-schedule-table">
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Phase</TableHead>
-                  <TableHead>Days</TableHead>
-                  <TableHead>Weeks (approx)</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {scheduleRows.map((row, index) => (
-                  <TableRow key={`${row.phase}-${index}`} data-testid={`qs-schedule-row-${index}`}>
-                    <TableCell>{row.phase}</TableCell>
-                    <TableCell className="font-mono">{row.days}</TableCell>
-                    <TableCell className="font-mono">{(row.days / 7).toFixed(1)}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center" data-testid="qs-schedule-empty-state">
+                <p className="text-sm text-slate-700">
+                  Run <strong>Auto Generate Estimate</strong> to produce a phase-by-phase construction schedule from your project inputs.
+                </p>
+              </div>
+            ) : (
+              <>
+                {(() => {
+                  const totalDays = scheduleRows.reduce((sum, p) => sum + Number(p.days || 0), 0);
+                  const totalWeeks = Number((totalDays / 7).toFixed(1));
+                  const totalMonths = Number((totalDays / 30).toFixed(1));
+                  const palette = [
+                    { bg: "bg-amber-100", bar: "bg-amber-500", text: "text-amber-900", ring: "ring-amber-200" },
+                    { bg: "bg-sky-100", bar: "bg-sky-500", text: "text-sky-900", ring: "ring-sky-200" },
+                    { bg: "bg-violet-100", bar: "bg-violet-500", text: "text-violet-900", ring: "ring-violet-200" },
+                    { bg: "bg-emerald-100", bar: "bg-emerald-500", text: "text-emerald-900", ring: "ring-emerald-200" },
+                    { bg: "bg-rose-100", bar: "bg-rose-500", text: "text-rose-900", ring: "ring-rose-200" },
+                    { bg: "bg-indigo-100", bar: "bg-indigo-500", text: "text-indigo-900", ring: "ring-indigo-200" },
+                  ];
+                  let cumulative = 0;
+                  const ganttBars = scheduleRows.map((row, i) => {
+                    const start = cumulative;
+                    const days = Number(row.days || 0);
+                    cumulative += days;
+                    return {
+                      ...row,
+                      idx: i,
+                      startDay: start,
+                      endDay: cumulative,
+                      startWeek: Number((start / 7).toFixed(1)),
+                      endWeek: Number((cumulative / 7).toFixed(1)),
+                      offsetPct: totalDays > 0 ? (start / totalDays) * 100 : 0,
+                      widthPct: totalDays > 0 ? (days / totalDays) * 100 : 0,
+                      palette: palette[i % palette.length],
+                    };
+                  });
+                  const projectStartDate = new Date();
+                  const projectEndDate = new Date();
+                  projectEndDate.setDate(projectEndDate.getDate() + totalDays);
+                  const fmtDate = (d) => d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+
+                  return (
+                    <>
+                      {/* KPI strip */}
+                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4" data-testid="qs-schedule-kpi-grid">
+                        <div className="rounded-xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-4" data-testid="qs-schedule-kpi-days">
+                          <p className="text-xs uppercase tracking-wider text-slate-500">Total Duration</p>
+                          <p className="font-mono text-2xl text-slate-900">{totalDays} days</p>
+                        </div>
+                        <div className="rounded-xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-4" data-testid="qs-schedule-kpi-weeks">
+                          <p className="text-xs uppercase tracking-wider text-slate-500">In Weeks</p>
+                          <p className="font-mono text-2xl text-slate-900">{totalWeeks}</p>
+                        </div>
+                        <div className="rounded-xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-4" data-testid="qs-schedule-kpi-months">
+                          <p className="text-xs uppercase tracking-wider text-slate-500">In Months</p>
+                          <p className="font-mono text-2xl text-slate-900">{totalMonths}</p>
+                        </div>
+                        <div className="rounded-xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-4" data-testid="qs-schedule-kpi-phases">
+                          <p className="text-xs uppercase tracking-wider text-slate-500">Phases</p>
+                          <p className="font-mono text-2xl text-slate-900">{scheduleRows.length}</p>
+                        </div>
+                      </div>
+
+                      {/* Project window */}
+                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3" data-testid="qs-schedule-window">
+                        <div>
+                          <p className="text-xs text-slate-500">Project Start</p>
+                          <p className="font-mono text-sm text-slate-900">{fmtDate(projectStartDate)}</p>
+                        </div>
+                        <div className="flex-1 px-4">
+                          <div className="h-1 rounded-full bg-gradient-to-r from-amber-400 via-sky-400 to-emerald-500" />
+                        </div>
+                        <div className="text-right">
+                          <p className="text-xs text-slate-500">Estimated Handover</p>
+                          <p className="font-mono text-sm text-slate-900">{fmtDate(projectEndDate)}</p>
+                        </div>
+                      </div>
+
+                      {/* Gantt-style timeline */}
+                      <div className="rounded-xl border border-slate-200 bg-white p-4" data-testid="qs-schedule-gantt">
+                        <p className="mb-3 text-sm font-semibold text-slate-700">Phase Timeline (Gantt)</p>
+                        <div className="space-y-3">
+                          {ganttBars.map((bar) => (
+                            <div key={`gantt-${bar.idx}`} className="grid grid-cols-12 items-center gap-2" data-testid={`qs-schedule-gantt-row-${bar.idx}`}>
+                              <div className="col-span-3 truncate text-xs font-medium text-slate-700 sm:col-span-2">{bar.phase}</div>
+                              <div className="col-span-9 sm:col-span-10">
+                                <div className="relative h-8 w-full rounded-lg bg-slate-100">
+                                  <div
+                                    className={`absolute top-0 h-8 rounded-lg ${bar.palette.bar} ring-2 ${bar.palette.ring} flex items-center px-2`}
+                                    style={{ left: `${bar.offsetPct}%`, width: `${Math.max(bar.widthPct, 4)}%` }}
+                                    title={`Day ${bar.startDay} – ${bar.endDay} (${bar.days} days)`}
+                                  >
+                                    <span className="truncate text-[10px] font-semibold text-white">
+                                      {bar.days}d · W{bar.startWeek}–W{bar.endWeek}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        {/* Week scale */}
+                        <div className="mt-3 flex justify-between text-[10px] text-slate-400">
+                          <span>Week 0</span>
+                          <span>W{Math.round(totalWeeks * 0.25)}</span>
+                          <span>W{Math.round(totalWeeks * 0.5)}</span>
+                          <span>W{Math.round(totalWeeks * 0.75)}</span>
+                          <span>W{totalWeeks}</span>
+                        </div>
+                      </div>
+
+                      {/* Phase cards */}
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3" data-testid="qs-schedule-phase-cards">
+                        {ganttBars.map((bar) => (
+                          <div key={`card-${bar.idx}`} className={`rounded-xl border border-slate-200 ${bar.palette.bg} p-4`} data-testid={`qs-schedule-phase-card-${bar.idx}`}>
+                            <div className="flex items-start justify-between">
+                              <div>
+                                <p className={`text-xs uppercase tracking-wider ${bar.palette.text}`}>Phase {bar.idx + 1}</p>
+                                <p className="text-base font-semibold text-slate-900">{bar.phase}</p>
+                              </div>
+                              <div className={`rounded-full ${bar.palette.bar} px-2 py-1 text-xs font-bold text-white`}>{bar.days}d</div>
+                            </div>
+                            <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-700">
+                              <div>
+                                <p className="text-slate-500">Start</p>
+                                <p className="font-mono">Day {bar.startDay} (W{bar.startWeek})</p>
+                              </div>
+                              <div>
+                                <p className="text-slate-500">End</p>
+                                <p className="font-mono">Day {bar.endDay} (W{bar.endWeek})</p>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Detailed table fallback */}
+                      <details className="rounded-lg border border-slate-200 bg-slate-50 p-3" data-testid="qs-schedule-table-details">
+                        <summary className="cursor-pointer text-sm font-medium text-slate-700">View as table</summary>
+                        <Table data-testid="qs-schedule-table" className="mt-3">
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Phase</TableHead>
+                              <TableHead>Days</TableHead>
+                              <TableHead>Weeks</TableHead>
+                              <TableHead>Start (Day)</TableHead>
+                              <TableHead>End (Day)</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {ganttBars.map((row) => (
+                              <TableRow key={`${row.phase}-${row.idx}`} data-testid={`qs-schedule-row-${row.idx}`}>
+                                <TableCell>{row.phase}</TableCell>
+                                <TableCell className="font-mono">{row.days}</TableCell>
+                                <TableCell className="font-mono">{(row.days / 7).toFixed(1)}</TableCell>
+                                <TableCell className="font-mono">{row.startDay}</TableCell>
+                                <TableCell className="font-mono">{row.endDay}</TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </details>
+                    </>
+                  );
+                })()}
+              </>
+            )}
           </CardContent>
         </Card>
       ) : null}
@@ -1585,10 +1792,26 @@ export default function QSEstimatorPage() {
             <CardTitle className="text-2xl">Indian Weather Forecast (OpenWeather)</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="flex flex-wrap gap-2" data-testid="qs-weather-actions">
-              <Input value={weatherCity} onChange={(e) => setWeatherCity(e.target.value)} className="w-[260px]" data-testid="qs-weather-city-input" placeholder="City (India)" />
+            <div className="flex flex-wrap items-end gap-2" data-testid="qs-weather-actions">
+              <div>
+                <p className="mb-1 text-xs text-slate-500">City (India)</p>
+                <Input value={weatherCity} onChange={(e) => setWeatherCity(e.target.value)} className="w-[220px]" data-testid="qs-weather-city-input" />
+              </div>
+              <div className="flex-1 min-w-[260px]">
+                <p className="mb-1 text-xs text-slate-500">OpenWeather API Key (saved locally)</p>
+                <Input
+                  type="password"
+                  value={weatherApiKey}
+                  onChange={(e) => saveWeatherApiKey(e.target.value)}
+                  placeholder="Paste your OpenWeather API key here"
+                  data-testid="qs-weather-api-key-input"
+                />
+              </div>
               <Button onClick={() => loadWeatherForecast(weatherCity)} data-testid="qs-weather-fetch-button">Fetch Forecast</Button>
             </div>
+            <p className="text-xs text-slate-500" data-testid="qs-weather-key-help">
+              Don't have a key? Get one free at <a href="https://openweathermap.org/api" target="_blank" rel="noreferrer" className="text-sky-600 underline">openweathermap.org/api</a> (Sign up → API Keys tab). The key is stored only in your browser.
+            </p>
 
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3" data-testid="qs-weather-status-panel">
               <p className="text-sm text-slate-700" data-testid="qs-weather-status-text">
@@ -1596,7 +1819,7 @@ export default function QSEstimatorPage() {
               </p>
               {!weatherData?.hasApiKey ? (
                 <p className="mt-1 text-xs text-amber-700" data-testid="qs-weather-missing-key-text">
-                  Missing API key. Add <code>OPENWEATHER_API_KEY</code> in backend .env to enable live data.
+                  No live data yet. Paste your OpenWeather API key above and click Fetch Forecast.
                 </p>
               ) : null}
             </div>

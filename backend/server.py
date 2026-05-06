@@ -1612,14 +1612,14 @@ def _coerce_qs_boq_item(version_id: str, payload: QSBoqItemInput) -> QSBoqItem:
     )
 
 
-def _fetch_openweather_forecast(city: str) -> WeatherForecastResponse:
-    api_key = os.environ.get("OPENWEATHER_API_KEY", "").strip()
+def _fetch_openweather_forecast(city: str, override_key: str = "") -> WeatherForecastResponse:
+    api_key = (override_key or os.environ.get("OPENWEATHER_API_KEY", "")).strip()
     if not api_key or api_key == "TEMP_PLACEHOLDER_KEY":
         return WeatherForecastResponse(
             city=city,
             has_api_key=False,
             provider="openweathermap",
-            message="OPENWEATHER_API_KEY missing/placeholder. Add real key to enable live forecast.",
+            message="OPENWEATHER_API_KEY missing/placeholder. Paste a key in the Weather tab or set OPENWEATHER_API_KEY in backend .env to enable live forecast.",
             forecast_days=[],
         )
 
@@ -2168,14 +2168,14 @@ async def list_export_logs(project_version_id: Optional[str] = None):
 
 
 @api_router.get("/weather/forecast", response_model=WeatherForecastResponse)
-async def get_weather_forecast(city: str = "Nashik"):
+async def get_weather_forecast(city: str = "Nashik", api_key: str = ""):
     try:
-        return _fetch_openweather_forecast(city)
+        return _fetch_openweather_forecast(city, override_key=api_key)
     except Exception as error:
         logger.exception("Weather forecast failed")
         return WeatherForecastResponse(
             city=city,
-            has_api_key=bool(os.environ.get("OPENWEATHER_API_KEY", "").strip()),
+            has_api_key=bool((api_key or os.environ.get("OPENWEATHER_API_KEY", "")).strip()),
             provider="openweathermap",
             message=f"Weather service currently unavailable: {str(error)[:160]}",
             forecast_days=[],
